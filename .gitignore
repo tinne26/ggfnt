@@ -1,0 +1,7 @@
+# ignore go workspaces
+*.work
+*.work.sum
+
+# random ignores
+/unused/
+TODO.txt
