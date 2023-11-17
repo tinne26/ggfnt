@@ -1,12 +1,14 @@
-# `tgbf` font format specification
+# `ggfnt` font format specification
 
 This is a bitmap font format created for indie game development and pixel art games.
 
-Font files use the `.tgbf` file extension.
+Font files use the `.ggfnt` file extension.
 
-File names should preferently follow the "name-type-size-version.tgbf" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.tgbf`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory. 
+.ggfnt
 
-Maximum font file size is limited to 64MiB per spec, which is much more than enough for practical purposes and eliminates a whole class of problems during parsing, storage and others.
+File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory. 
+
+Maximum font file size is limited to 32MiB per spec, which is much more than enough for practical purposes and eliminates a whole class of problems during parsing, storage and others.
 
 The binary format is designed to be reasonably compact, have safe limits and keep all critical data on easy to search structures (binary searches mostly), avoiding the need for many complex helper structures after parsing.
 
@@ -42,7 +44,7 @@ All data sections are defined consecutively and they are all non-skippable.
 
 6 bytes:
 ```Golang
-[]byte{'t', '2', '6', 'g', 'b', 'f'}
+[]byte{'t', 'g', 'g', 'f', 'n', 't'}
 ```
 
 After the signature, all data is gzipped. The 64MiB size limit applies to the *uncompressed font data*.
@@ -50,7 +52,7 @@ After the signature, all data is gzipped. The 64MiB size limit applies to the *u
 ### Header
 
 ```Golang
-FormatVersion uint32 // tgbf format version (only 0x0000_0001 allowed at the moment)
+FormatVersion uint32 // ggfnt format version (only 0x0000_0001 allowed at the moment)
 FontID uint64 // font unique ID, generated with crypto/rand or similar
 VersionMajor uint16 // starts at 0, raise when releasing major font changes
 VersionMinor uint16 // starts at 0, raise when releasing minor font changes
@@ -70,7 +72,7 @@ Everything should be fairly self-explanatory. Family is for related groups of fo
 
 ```Golang
 NumGlyphs uint16 // max is 56789, then 3211 reserved for control codes, then 5530 for custom glyphs
-VertLayout bool // if true, additional data must be provided for vertical drawing metrics
+HasVertLayout bool // if true, additional data must be provided for vertical drawing metrics
 MonoWidth uint8 // set to 0 if the font is not monospaced
 MonoHeight uint8 // only relevant if VertLayout is true. like MonoWidth but for height.
 
@@ -130,7 +132,7 @@ topOffset, bottomOffset int8 // omitted if VertLayout is false.
 vertDrawHorzOffset int8 // omitted if VertLayout is false. leftOffset is *NOT APPLIED* on vert draws
 ```
 
-Glyph data is easy to look up thanks to the `GlyphMaskOffsets` index. Data is encoded using raster commands are sequences of "control codes" and data:
+Glyph data is easy to look up thanks to the `GlyphMaskOffsets` index. Data is encoded using raster commands, which are sequences of "control codes" and data:
 - Control codes are based on bit flags:
 	- 0b0000_0001 : change lightness. Defaults to 255 (max). Changes persist through multiple commands (lightness is only reset on new glyph mask definition). Will have uint8 value in the data.
 	- 0b0000_0010 : move horz, will have int8 value in the data.
@@ -156,18 +158,19 @@ Names must conform to `basic-name-regexp`. Names aren't meant to support naming 
 NumVariables uint8
 Variables [NumVariables](uint8, uint8, uint8, uint8) // (init value, min value, max value)
 
-NamedVarKeys []uint8 // references VariableNames in order
-NamedVarOffsets []uint16 // references VariableNames in order
-VariableNames []shortString // in lexicographical order
+NumNamedVars uint8
+NamedVarKeys [NumNamedVars]uint8 // references VariableNames in order
+NamedVarOffsets [NumNamedVars]uint16 // references VariableNames in order
+VariableNames [NumNamedVars]shortString // in lexicographical order
 ```
 
 Variable names must conform to `basic-name-regexp`. The number of variables is limited to 255.
 
 Variables are used for conditional or variable `code point -> rune` mappings, and for custom FSMs. This is all explored throughout the next sections.
 
-### Mapping table
+### Mapping
 
-Every font needs a mapping table in order to indicate which glyph indices correspond to each unicode code point.
+Every font needs a mapping section in order to indicate which glyph indices correspond to each unicode code point.
 
 ```Golang
 NumMappingEntries uint32
@@ -177,7 +180,7 @@ MappingModeRoutines short[]uint8
 
 FastMappingTables short[]FastMappingTable // see FastMappingTable section, prioritized over the general mapping table
 
-CodePointList [NumMappingEntries]uint32
+CodePointList [NumMappingEntries]int32
 CodePointModes [NumMappingEntries]uint8 // we do the binary search here
 CodePointMainIndices [NumMappingEntries]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices
 CodePointModeIndices short[]uint16
@@ -241,11 +244,11 @@ Fast mapping tables are designed to avoid binary searches on common contiguous r
 
 ```Golang
 TableCondition MappingTableCondition
-FirstCodePoint int32 // inclusive
-LastCodePoint  int32 // inclusive
+StartCodePoint int32 // inclusive
+EndCodePoint   int32 // exclusive
 CodePointModes [TableLength]uint8
 CodePointMainIndices [TableLength]uint16
-CodePointModeIndices []uint16
+CodePointModeIndices short[]uint16
 ```
 
 Mapping table condition:
@@ -274,13 +277,17 @@ VertKerningValues [NumVertKerningPairs]int8
 
 Kerning encoding is simplistic and relies on binary searches. Kerning classes are supported, but only on the editor, through a separate file explained in the next setion.
 
+### End
+
+TODO: should I have some CRC in case I want to be strict in checking data and its internal integrity? And/or some magic sequence to make sure I am at the expected position? Hmmm, since all sections are strictly necessary, this is probably not relevant.
+
 ### Edition data
 
-Edition data is stored in a separate file, the `.tgbfwork` file. Preferently, the file name should be shared with the main font file so we can get the two easily when loading the files, but it's not strictly required. Unlike regular `.tgbf` files, the data is not gzipped.
+Edition data is stored in a separate file, the `.ggwkfnt` file. Preferently, the file name should be shared with the main font file so we can get the two easily when loading the files, but it's not strictly required. Unlike regular `.ggfnt` files, the data is not gzipped.
 
 Signature:
 ```Golang
-[]byte{'t', 'w', 'k', 'g', 'b', 'f'}
+[]byte{'w', 'k', 'g', 'f', 'n', 't'}
 ```
 
 ```Golang
