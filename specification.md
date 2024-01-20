@@ -4,8 +4,6 @@ This is a bitmap font format created for indie game development and pixel art ga
 
 Font files use the `.ggfnt` file extension.
 
-.ggfnt
-
 File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory. 
 
 Maximum font file size is limited to 32MiB per spec, which is much more than enough for practical purposes and eliminates a whole class of problems during parsing, storage and others.
@@ -15,7 +13,7 @@ The binary format is designed to be reasonably compact, have safe limits and kee
 ## Main limitations
 
 - Glyph max size is 256x256. This could theoretically get problematic with ligatures in complex scripts, but this is not a primary concern at the moment.
-- Max font file size is 64MiB.
+- Max font file size is 32MiB.
 - Max number of glyphs is 56789. Some space is reserved for additional "control glyph indices".
 - Glyph composition is not supported (creating a single glyph from the combination of other glyphs).
 - FSMs section hasn't been designed yet. This would enable complex script shaping assistance and ligatures, which I personally consider fairly important features (even if advanced and not critical for most users of this format).
@@ -28,13 +26,14 @@ Data in the spec can be described using the following types:
 - `bool`: single byte, must be 0 (false) or 1 (true).
 - `short string`: an `uint8` indicating string length in bytes, followed by the string data in utf8.
 - `string`: an `uint16` indicating string length in bytes, followed by the string data in utf8.
-- `short slice`: an `uint16` indicating the number of elements in the slice, followed by the list contents.
-- `slice`: an `uint32` indicating the number of elements in the slice, followed by list contents.
+- `short slice`: an `uint8` indicating the number of elements in the slice, followed by the list contents.
+- `slice`: an `uint16` indicating the number of elements in the slice, followed by the list contents.
 - `array`: a slice with an implicit length given by some other value already present in the font data. In other words: a slice without the initial size indication.
 - `date`: a triplet of (uint16, uint8, uint8) (year, month, day).
+- `blob`: a data blob of variably-sized elements, indexed by a separate slice.
 
 Misc.:
-- basic-name-regexp: `[a-zA-Z](-?[A-Za-z0-9]+)*`, used in a couple places. The natural description of the regxp is the following: name uses only ascii, starts with a letter, and might use hyphens as separators.
+- basic-name-regexp: `[a-zA-Z](-?[A-Za-z0-9]+)*`, used in a couple places. The natural description of the regxp is the following: name uses only ascii, starts with a letter, and might use hyphens as separators. There's also an additional size limit of max 32 characters.
 
 ## Data sections
 
@@ -44,10 +43,10 @@ All data sections are defined consecutively and they are all non-skippable.
 
 6 bytes:
 ```Golang
-[]byte{'t', 'g', 'g', 'f', 'n', 't'}
+[6]byte{'t', 'g', 'g', 'f', 'n', 't'}
 ```
 
-After the signature, all data is gzipped. The 64MiB size limit applies to the *uncompressed font data*.
+After the signature, all data is gzipped. The 32MiB size limit applies to the *uncompressed font data*.
 
 ### Header
 
@@ -67,6 +66,8 @@ About string // other info about the font, may have length 0. <255 chars recomme
 ```
 
 Everything should be fairly self-explanatory. Family is for related groups of fonts or font faces, like bold and italic versions, sans/serif variants and so on.
+
+For major and minor versions, any incompatible change (removing glyphs or tags, changing their meaning, etc) should happen on major versions only, with the only exception of version 0, which is considered alpha/unstable.
 
 ### Metrics
 
@@ -88,7 +89,7 @@ LineGap uint8 // suggested line gap for the font
 
 NumGlyphs includes only the number of glyphs with actual graphical data (no control glyph indices).
 
-MonoWidth must be allowed to be 0 even if in practice all glyphs have the same width, as this field also expresses intent.
+MonoWidth must be allowed to be 0 even if in practice all glyphs have the same width, as this field also expresses intent and future compatibility. If 1, the parser might check that the monospaced width is respected.
 
 Regarding the glyph range, this font format has multiple areas for control glyph indices:
 - 56789 - 56899 (inclusive): predefined control codes that everyone must understand. The currently defined control indices are the following:
@@ -96,9 +97,9 @@ Regarding the glyph range, this font format has multiple areas for control glyph
 	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace mising glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning.
 	- 56791: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
 	- ... the rest are undefined
-- 56900 - 56999: reserved for font-specific control codes. E.g., for use in FSMs. Some of these control codes can be named.
+- 56900 - 56999: reserved for font-specific control codes. E.g., for use in FSMs. Some of these control codes can be named (font-level customization).
 - 57000 - 57999: reserved for renderer-specific control codes (library-level customization).
-- 58000 - 59999: reserved for user-specific control codes (library user customization).
+- 58000 - 59999: reserved for user-specific control codes (application-level customization).
 
 Custom glyphs can be added at runtime in the 60k - 62k range (inclusive). The rest is undefined.
 
@@ -110,19 +111,23 @@ The `ExtraAscent` is quite common unless the font actively "squeezes" capital le
 
 The `LowercaseAscent` should be set to 0 when no lowercase version of the letters exist. Having unicode mappings from lowercase letters to their capitalized glyphs is discouraged; being strict is better in the font definition context. Diacritic marks on lowecase letters must not be considered for this ascent value. Finally, if lowercase letters are shaped as uppercase letters (changing only the size of lowercase and uppercase letters, known as "small-caps"), this metric still applies and must be set. This can also be done conditionally with a feature flag.
 
-If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), parsing should immediately return an error. That being said, not all verifications are cheap, so font parsers should offer options or additional methods to check the correctness of the font with different degrees of strictness.
+If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), parsing should immediately return an error. That being said, not all verifications are cheap, so font parsers might offer options or additional methods to check the correctness of the font with different degrees of strictness.
 
 ### Glyphs data
 
 ```Golang
 NumNamedGlyphs uint16
 NamedGlyphIDs [NumNamedGlyphs]uint16 // references GlyphNames in order (custom control codes can be included)
-NamedGlyphOffsets [NumNamedGlyphs]uint16 // references GlyphNames in order
-GlyphNames [NumNamedGlyphs]shortString // in lexicographical order. names can't repeat
+GlyphNameEndOffsets [NumNamedGlyphs]uint32 // indexes GlyphNames in order
+GlyphNames blob[noLenString] // in lexicographical order. names can't repeat
 
-GlyphMaskOffsets [NumGlyphs]uint32 // offsets to glyph data for the given glyph index
-GlyphMasks [NumGlyphs](Bounds, short[]RasterOperation) // (move to, line to, etc.)
+GlyphMaskEndOffsets [NumGlyphs]uint32 // indexes GlyphMasks
+GlyphMasks blob[Bounds, [...]RasterOperation] // (move to, line to, etc.)
 ```
+
+Minor technical note: while using uint16 instead of uint32 for NameGlyphOffsets would almost always be reasonable, I want to avoid tricky implicit restrictions, and names themselves also tend to have much higher overhead than those extra 2 bytes per entry.
+
+Glyph names must match basic-name-regexp.
 
 The glyph bounds are:
 ```Golang
@@ -134,15 +139,15 @@ vertDrawHorzOffset int8 // omitted if VertLayout is false. leftOffset is *NOT AP
 
 Glyph data is easy to look up thanks to the `GlyphMaskOffsets` index. Data is encoded using raster commands, which are sequences of "control codes" and data:
 - Control codes are based on bit flags:
-	- 0b0000_0001 : change lightness. Defaults to 255 (max). Changes persist through multiple commands (lightness is only reset on new glyph mask definition). Will have uint8 value in the data.
-	- 0b0000_0010 : move horz, will have int8 value in the data.
-	- 0b0000_0100 : move vert, will have int8 value in the data.
+	- 0b0000_0001 : change color key. Defaults to 255. Changes persist through multiple commands (only reset on new glyph mask definition). Will have uint8 value in the data.
+	- 0b0000_0010 : pre move horz, will have int8 value in the data.
+	- 0b0000_0100 : pre move vert, will have int8 value in the data.
 	- 0b0000_1000 : draw horz, will have int8 value in the data.
 	- 0b0001_0000 : draw vert, will have int8 value in the data.
 	- (note: if draw horz + vert are combined, we draw a rect)
-	- 0b0010_0000 : post horz move (can be used even if not drawing).
-	- 0b0100_0000 : post vert move (can be used even if not drawing).
-	- 0b1000_0000 : reset alpha to previous value.
+	- 0b0010_0000 : post horz move (can be used even if not drawing), will have int8 in the data.
+	- 0b0100_0000 : post vert move (can be used even if not drawing), will have int8 in the data.
+	- 0b1000_0000 : reset color key to previous value before the command.
 - Data sequences are determined by the control codes.
 - The sequences end based on the `short[]RasterOperation` length.
 
@@ -152,21 +157,55 @@ Named glyphs are useful to look up "unique" glyphs from within the code, like, "
 - `notdef`: rectangle representing missing glyph.
 Names must conform to `basic-name-regexp`. Names aren't meant to support naming *all* glyphs in the font, only glyphs that have to be referenceable in particular due to *specific game needs* or general operation (e.g. notdef).
 
-### Parametrization
+### Coloring
+
+Actual coloring table:
+```Golang
+NumDyes uint8 // should virtually always be at least 1
+DyeNameEndOffsets [NumDyes]uint16
+DyeNames blob[noLenString] // first dye should be named "main". must match basic-name-regexp
+
+// predefined palettes
+NumPalettes uint8 // value 255 not allowed, palette 255 is reserved for default alpha
+PaletteEndOffsets [NumPalettes]uint16
+Palettes blob[[...](uint8, uint8, uint8, uint8)]
+PaletteNameEndOffsets [NumPalettes]uint16
+PaletteNames blob[noLenString] // must match basic-name-regexp or ""
+
+// definable sections
+NumSections uint8
+SectionStarts [NumSections]uint8 // inclusive
+SectionsEnd uint8 // inclusive
+SectionNameEndOffsets [NumSections]uint16
+SectionNames blob[noLenString] // must match basic-name-regexp or ""
+
+SectionOptionEndOffsets [NumSections]uint16
+SectionOptions blob[[...]uint8] // first palette index is the default
+```
+
+Both palette names and section names can be empty to be considered "private", but in that case, private palettes must be used (and can only be used) on some private section as the default value, and private sections must only include one palette.
+
+If cardinality of palette doesn't match the color section, return a parsing error. We might be more lenient in the future, but let's worry about that later.
+
+For sections, parsers must enforce a limit of max 16 palette choices per section.
+
+Note for renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
+
+### Variables
 
 ```Golang
 NumVariables uint8
-Variables [NumVariables](uint8, uint8, uint8, uint8) // (init value, min value, max value)
+Variables [NumVariables](uint8, uint8, uint8) // (init value, min value, max value)
 
 NumNamedVars uint8
 NamedVarKeys [NumNamedVars]uint8 // references VariableNames in order
-NamedVarOffsets [NumNamedVars]uint16 // references VariableNames in order
-VariableNames [NumNamedVars]shortString // in lexicographical order
+VarNameEndOffsets [NumNamedVars]uint16 // references VariableNames in order
+VariableNames blob[noLenString] // in lexicographical order
 ```
 
-Variable names must conform to `basic-name-regexp`. The number of variables is limited to 255.
+Variable names must conform to `basic-name-regexp`. The max number of variables is 255.
 
-Variables are used for conditional or variable `code point -> rune` mappings, and for custom FSMs. This is all explored throughout the next sections.
+Variables are used for conditional or variable `code point -> rune` mappings and for custom FSMs. This is all explored throughout the next sections.
 
 ### Mapping
 
@@ -174,16 +213,16 @@ Every font needs a mapping section in order to indicate which glyph indices corr
 
 ```Golang
 NumMappingEntries uint32
-NumMappingModes uint8 // typically 0. can't be 256, max is 255. default mode not counted
-MappingModeRoutineOffsets [NumMappingModes]uint16
-MappingModeRoutines short[]uint8
+NumMappingModes uint8 // typically 0. default mode is 255. max is 254
+MappingModeRoutineEndOffsets [NumMappingModes]uint16
+MappingModeRoutines blob[[...]uint8]
 
 FastMappingTables short[]FastMappingTable // see FastMappingTable section, prioritized over the general mapping table
 
-CodePointList [NumMappingEntries]int32
-CodePointModes [NumMappingEntries]uint8 // we do the binary search here
-CodePointMainIndices [NumMappingEntries]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices
-CodePointModeIndices short[]uint16
+CodePointList [NumMappingEntries]int32 // we do the binary search here if no fast table was relevant
+CodePointModes [NumMappingEntries]uint8
+CodePointMainIndices [NumMappingEntries]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices otherwise
+CodePointModeIndices []uint16
 ```
 
 At the most basic level, mapping can be done by assigning mode 255 to every entry, which is a special mode that indicates that a code point maps unconditionally to a single glyph index.
@@ -194,7 +233,7 @@ The remaining modes, from 0 to 254, can be customly defined to enable a variety 
 - Feature flags:
 	- Small caps (lowercase displayed as smaller uppercase) (should be named "small-caps").
 	- Squeezing capital letters when they have accents.
-	- Numeric style (lining figures, oldstyle figures, proportional figures, tabular figures).
+	- Numeric style (lining figures, oldstyle figures, proportional figures, tabular figures) (TODO: this sounds like needing enums).
 	- Slashed zero.
 	- Superscript and subscript.
 
@@ -204,20 +243,20 @@ For the custom modes, each mapping mode routine is defined byte by byte:
 - We get one byte indicating a command:
 	- The top 2 bits (0bXX00_0000) indicate the command type:
 		- 00 = operate: increase / decrease / set the "result" index or a variable.
-		- 01 = if/stop: a.k.a filter. Can also be used as a single byte "terminate" (0 == 1).
+		- 01 = if/stop: a.k.a filter. Can also be used as a single byte termination (0 == 1).
 		- 10 = if/else: has two bytes of offsets (num `if` bytes, num `else` bytes)
-		- 11 = undefined: ...maybe quick conditional operation?
+		- 11 = reserved for future versions (...maybe quick conditional operation?).
 	- The remaining 6 bits are the parametrization, which depends on the command type itself. This is described in more detail later.
 - After the command byte, we get zero to many bytes with the data for the command. This amount of bytes depends on the command type and its parametrization.
-- Each mode routine can have at most 196 bytes. Mode routines are evaluated each time we have to map a character, so going beyond that would result in an unacceptable level of complexity and overhead.
+- Each mode routine can have at most 228 bytes. Mode routines are evaluated each time we have to map a character, so going beyond that would result in an unacceptable level of complexity and overhead.
 
-> Notice: a renderer can't really cache mode results. While this would work well in some cases, in others dropping the cache would be too expensive. Random rolls also can't be cached. Animations are not caching-friendly. Trying to develop heuristics will often result in more overhead than eexcuting the mode routine itself.
+> Notice: a renderer can't really cache mode results. While this would work well in some cases, in others dropping the cache would be too expensive. Random rolls also can't be cached. Animations are not caching-friendly. Trying to develop heuristics will often result in more overhead than executing the mode routine itself.
 
 Parametrization bits for `operate`:
 ```
 0b0000_00XX: 00 = set, 01 = increase by one, 10 = increase, 11 = decrease
 0b0000_XX00: operand type (00 = var, 01 = const, 10 = rng, 11 = rng(NumModePossibleResults)
-0b000X_0000: result type (0 = result index, 1 = variable (ID given explicitly in data))
+0b000X_0000: result type (0 = ResultIndex, 1 = variable (ID given explicitly in data))
 0b00X0_0000: quick exit; if 1, we stop after this command
 ```
 
@@ -240,15 +279,13 @@ Parametrization bits for quick conditional operation (prototype, undecided):
 
 Fast mapping tables are designed to avoid binary searches on common contiguous regions of unicode code points. The most common case is ASCII range 32 - 126. There can be some unused code points in the middle, and they should have 56789 ("missing" control index) assigned to them.
 
-// TODO: wouldn't it be smart to have a whole table be able to use a "mode" condition? This way, simple feature flags like "small-caps" could be encoded directly at the table level.
-
 ```Golang
 TableCondition MappingTableCondition
-StartCodePoint int32 // inclusive
-EndCodePoint   int32 // exclusive
+StartCodePoint int32 // inclusive (int32 = rune)
+EndCodePoint   int32 // exclusive (int32 = rune)
 CodePointModes [TableLength]uint8
-CodePointMainIndices [TableLength]uint16
-CodePointModeIndices short[]uint16
+CodePointMainIndices [TableLength]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices otherwise
+CodePointModeIndices []uint16
 ```
 
 Mapping table condition:
@@ -258,7 +295,7 @@ FirstArgData  uint8
 SecondArgData uint8
 ```
 
-Parsers must limit the *total* fast mapping tables memory usage to 4KiB. Table lengths must also be strictly limited to less than 4096. Anything above a few hundred contiguous code points tends to be suspicious anyway.
+Parsers must limit the *total* fast mapping tables memory usage to 8KiB. Table lengths must also be strictly limited to less or equal than 1024. Anything above a few hundred contiguous code points tends to be suspicious anyway.
 
 ### FSMs
 
@@ -267,19 +304,19 @@ Parsers must limit the *total* fast mapping tables memory usage to 4KiB. Table l
 ### Kernings
 
 ```Golang
-NumKerningPairs uint32
-KerningPairs [NumKerningPairs]uint32 // for binary search (the uint32 is uint16|uint16 glyph indices)
-KerningValues [NumKerningPairs]int8
-NumVertKerningPairs uint32 // must be 0 unless VertLayout is true
-VertKerningPairs [NumVertKerningPairs]uint32 // only relevant if 
+NumHorzKerningPairs uint32
+HorzKerningPairs [NumHorzKerningPairs]uint32 // for binary search (the uint32 is uint16|uint16 glyph indices)
+HorzKerningValues [NumHorzKerningPairs]int8
+NumVertKerningPairs uint32 // must be 0 if VertLayout is false
+VertKerningPairs [NumVertKerningPairs]uint32
 VertKerningValues [NumVertKerningPairs]int8
 ```
 
-Kerning encoding is simplistic and relies on binary searches. Kerning classes are supported, but only on the editor, through a separate file explained in the next setion.
+Kerning encoding is simplistic and relies on binary searches. Kerning classes are supported, but only on the editor, through a separate file explained in the next section.
 
 ### End
 
-TODO: should I have some CRC in case I want to be strict in checking data and its internal integrity? And/or some magic sequence to make sure I am at the expected position? Hmmm, since all sections are strictly necessary, this is probably not relevant.
+Since data is gzipped, we expect the EOF here, which will also verify the checksum.
 
 ### Edition data
 
@@ -303,7 +340,7 @@ KerningClassIDs [NumClassedKernPairs]uint8
 NumClassedVertKernPairs uint32
 VertKerningClassPairs [NumClassedVertKernPairs]uint32
 VertKerningClassIDs [NumClassedVertKernPairs]uint8
-MappingModeNames []shortString // max 60 chars for the name
+MappingModeNames short[]shortString // max 60 chars for the name
 ```
 
 Misc. notes:
