@@ -19,6 +19,11 @@ func boolErrCheck(value uint8) error {
 	return errors.New("bool value must be 0 or 1")
 }
 
+func boolToUint8(truthy bool) uint8 {
+	if truthy { return 1 }
+	return 0
+}
+
 // Values <0.3 are fairly low entropy. anything <0.2 tends to be visibly low entropy
 func lazyEntropyUint64(value uint64) float64 {
 	var patterns [4]uint8
@@ -49,4 +54,62 @@ func cryptoRandUint64() (uint64, error) {
       id |= (uint64(randBytes[i]) << (i << 3))
    }
    return id, nil
+}
+
+// LE stands for "little endian"
+
+func decodeUint16LE(buffer []byte) uint16 {
+	if len(buffer) < 2 { panic(len(buffer)) }
+	return uint16(buffer[0]) | (uint16(buffer[1]) << 8)
+}
+
+func decodeUint32LE(buffer []byte) uint32 {
+	if len(buffer) < 4 { panic(len(buffer)) }
+	return (uint32(buffer[0]) <<  0) | (uint32(buffer[1]) <<  8) |
+	       (uint32(buffer[2]) << 16) | (uint32(buffer[3]) << 24)
+}
+
+func decodeUint64LE(buffer []byte) uint64 {
+	if len(buffer) < 8 { panic(len(buffer)) }
+	return (uint64(buffer[0]) <<  0) | (uint64(buffer[1]) <<  8) | (uint64(buffer[2]) << 16) |
+	       (uint64(buffer[3]) << 24) | (uint64(buffer[4]) << 32) | (uint64(buffer[5]) << 40) |
+	       (uint64(buffer[6]) << 48) | (uint64(buffer[7]) << 56)
+}
+
+func appendUint8(buffer []byte, value byte) []byte {
+	return append(buffer, value)
+}
+
+func appendUint16LE(buffer []byte, value uint16) []byte {
+	return append(buffer, byte(value), byte(value >> 8))
+}
+
+func appendUint32LE(buffer []byte, value uint32) []byte {
+	return append(buffer, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
+}
+
+func encodeUint32(buffer []byte, value uint32) {
+	if len(buffer) < 4 { panic("invalid usage of encodeUint32") }
+	buffer[0] = byte(value)
+	buffer[1] = byte(value >>  8)
+	buffer[2] = byte(value >> 16)
+	buffer[3] = byte(value >> 24)
+}
+
+func appendUint64LE(buffer []byte, value uint64) []byte {
+	return append(
+		buffer, 
+		byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
+		byte(value >> 32), byte(value >> 40), byte(value >> 48), byte(value >> 56),
+	)
+}
+
+func appendShortString(buffer []byte, str string) ([]byte, error) {
+	if len(str) > 255 { return buffer, errors.New("can't append string with len() > 255") }
+	return append(append(buffer, uint8(len(str))), str...), nil
+}
+
+func appendString(buffer []byte, str string) ([]byte, error) {
+	if len(str) > 65535 { return buffer, errors.New("can't append string with len() > 65535") }
+	return append(appendUint16LE(buffer, uint16(len(str))), str...), nil
 }

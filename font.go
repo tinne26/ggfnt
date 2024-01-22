@@ -124,7 +124,7 @@ func (self *FontHeader) About() string { panic("unimplemented") }
 
 func (self *FontHeader) Validate(mode FmtValidation) error {
 	// default checks
-	if self.FormatVersion() != 0x0000_00001 { return errors.New("invalid FormatVersion") }
+	if self.FormatVersion() != FormatVersion { return errors.New("invalid FormatVersion") }
 	if lazyEntropyUint64(self.ID()) < 0.26 { return errors.New("font ID entropy too low") }
 	if self.NumGlyphs() == 0 { return errors.New("font must define at least one glyph") }
 	if self.Name() == "" { return errors.New("font name can't be empty") }

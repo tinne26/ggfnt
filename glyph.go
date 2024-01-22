@@ -31,5 +31,19 @@ type GlyphBounds struct {
 	// vertical bounds fields: these will be zero
 	// unless the font includes vertical layout data
 	TopOffset, BottomOffset int8
-	VertDrawHorzOffset int8
+	VertHorzOffset int8
 }
+
+func (self *GlyphBounds) appendWithoutVertLayout(buffer []byte) []byte {
+	return append(buffer, self.MaskWidth, self.MaskHeight, uint8(self.LeftOffset), uint8(self.RightOffset))
+}
+
+func (self *GlyphBounds) appendWithVertLayout(buffer []byte) []byte {
+	return append(
+		buffer,
+		self.MaskWidth, self.MaskHeight, uint8(self.LeftOffset), uint8(self.RightOffset), // regular bounds
+		uint8(self.TopOffset), uint8(self.BottomOffset), uint8(self.VertHorzOffset), // vert-layout related
+	)
+}
+
+

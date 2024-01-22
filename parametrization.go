@@ -17,10 +17,15 @@ type Parametrization struct {
 	scale uint8
 	interVertShift int8 // vertical interspacing shift
 	interHorzShift int8 // horz interspacing shift
+	coloring *Coloring
 }
 
 // Returns the underlying [Font].
 func (self *Parametrization) Font() *Font { return self.font }
+
+func (self *Parametrization) Coloring() *Coloring { return self.coloring }
+// TODO: maybe also Clone(). I was thinking about some "empty sibling", but
+//       there's no real need, I can already do font.Parametrize()
 
 // Sets a variable value. See also [FontVariables].
 func (self *Parametrization) SetVar(key VarKey, value uint8) error { panic("unimplemented") }

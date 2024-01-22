@@ -1,5 +1,7 @@
 # `ggfnt` font format specification
 
+> Version 0x0000_0001
+
 This is a bitmap font format created for indie game development and pixel art games.
 
 Font files use the `.ggfnt` file extension.
@@ -65,7 +67,7 @@ Author shortString // author name(s), may have length 0
 About string // other info about the font, may have length 0. <255 chars recommended
 ```
 
-Everything should be fairly self-explanatory. Family is for related groups of fonts or font faces, like bold and italic versions, sans/serif variants and so on.
+Everything should be fairly self-explanatory. Family is for related groups of fonts or font faces, like bold and italic versions, sans/serif variants and so on. Therefore, names would be "Swaggy Sans", "Swaggy Serif" and "Swaggy Bold", and the family would be only "Swaggy". In most cases, the name and family name will be the same.
 
 For major and minor versions, any incompatible change (removing glyphs or tags, changing their meaning, etc) should happen on major versions only, with the only exception of version 0, which is considered alpha/unstable.
 
@@ -134,7 +136,7 @@ The glyph bounds are:
 maskWidth, maskHeight uint8
 leftOffset, rightOffset int8 // I prefer "offsets" to "side bearings" terminology in this context
 topOffset, bottomOffset int8 // omitted if VertLayout is false.
-vertDrawHorzOffset int8 // omitted if VertLayout is false. leftOffset is *NOT APPLIED* on vert draws
+vertHorzOffset int8 // omitted if VertLayout is false. leftOffset is *NOT APPLIED* on vert draws
 ```
 
 Glyph data is easy to look up thanks to the `GlyphMaskOffsets` index. Data is encoded using raster commands, which are sequences of "control codes" and data:
@@ -320,7 +322,9 @@ Since data is gzipped, we expect the EOF here, which will also verify the checks
 
 ### Edition data
 
-Edition data is stored in a separate file, the `.ggwkfnt` file. Preferently, the file name should be shared with the main font file so we can get the two easily when loading the files, but it's not strictly required. Unlike regular `.ggfnt` files, the data is not gzipped.
+Edition data is stored in a separate file, the `.ggwkfnt` file. Preferently, the file name should be shared with the main font file so we can get the two easily when loading the files, but it's not strictly required. The data is gzipped right after the signature.
+
+There's also a 
 
 Signature:
 ```Golang
@@ -331,19 +335,18 @@ Signature:
 NumCategories uint8
 CategoryNames [NumCategories]shortString // max 60 chars for the name
 CategorySizes [NumCategories]uint16 // number of glyphs per category. total sum must equal NumGlyphs
-NumKernClasses uint8
-KerningClassNames [NumKernClasses]shortString // max 60 chars for the name
-KerningClassValues [NumKernClasses]int8
-NumClassedKernPairs uint32
-KerningClassPairs [NumClassedKernPairs]uint32 // glyphPair binary search slice
-KerningClassIDs [NumClassedKernPairs]uint8
-NumClassedVertKernPairs uint32
-VertKerningClassPairs [NumClassedVertKernPairs]uint32
-VertKerningClassIDs [NumClassedVertKernPairs]uint8
-MappingModeNames short[]shortString // max 60 chars for the name
+
+NumKerningClasses uint16
+KerningClassNames [NumKerningClasses]shortString // must conform to basic-name-regex (+ possible spaces)
+KerningClassValues [NumKerningClasses]int8
+
+NumHorzKerningPairsWithClasses uint32
+HorzKerningPairsWithClasses [NumHorzKerningPairsWithClasses]uint32 // glyphPair binary search slice
+HorzKerningPairClasses [NumHorzKerningPairsWithClasses]uint16
+NumVertKerningPairsWithClasses uint32
+VertKerningPairsWithClasses [NumVertKerningPairsWithClasses]uint32
+VertKerningPairClasses [NumVertKerningPairsWithClasses]uint16
+
+MappingModeNames short[]shortString // must conform to basic-name-regex (+ possible spaces)
 ```
 
-Misc. notes:
-- Offer options on export for `Overwrite version`, `New minor version`, `New major version`.
-- I'll need some quality checker or stats / health program, to check fast tables and others. Like, report on actual avoidable inefficiencies, fast table usage rates, etc. Maybe integrate into the editor itself.
-- ...
