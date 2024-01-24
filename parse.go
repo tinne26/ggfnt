@@ -11,7 +11,7 @@ func ParseFS(filesys fs.FS, filename string) (*Font, error) {
 	if err != nil { return nil, err }
 	stat, err := file.Stat()
 	if err != nil { return nil, err }
-	if stat.Size() > MaxSize {
+	if stat.Size() > MaxFontDataSize {
 		return nil, errors.New("file size exceeds limit")
 	}
 	
@@ -222,10 +222,8 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- mappings ---
-	font.offsetToMappings = uint32(parser.index)
-	
-	numMappingEntries, err := parser.ReadUint32()
-	if err != nil { return &font, err }
+	font.offsetToMappingModes = uint32(parser.index)
+
 	numMappingModes, err := parser.ReadUint8()
 	if err != nil { return &font, err }
 	if numMappingModes > 0 {
@@ -256,8 +254,10 @@ func Parse(reader io.Reader) (*Font, error) {
 			return &font, parser.NewError("fast mapping table declares a negative range")
 		}
 		tableLen := endCodePoint - startCodePoint
-		if tableLen > 1024 {
-			return &font, parser.NewError("fast mapping table length can't exceed 1024 code points")
+		if tableLen > maxFastMappingTableCodePoints {
+			return &font, parser.NewError(
+				"fast mapping table length can't exceed " + maxFastMappingTableCodePointsStr + " code points",
+			)
 		}
 		fastMappingTableMem += (3 + 4 + 4 + int(tableLen) + int(tableLen)*2) // still missing CodePointModeIndices data
 		if fastMappingTableMem > maxFastMappingTablesSize {
@@ -280,7 +280,10 @@ func Parse(reader io.Reader) (*Font, error) {
 	}
 
 	// main mapping table
-	font.offsetToCodePointList = uint32(parser.index)
+	font.offsetToMainMappings = uint32(parser.index)
+
+	numMappingEntries, err := parser.ReadUint16()
+	if err != nil { return &font, err }
 
 	// advance CodePointList, CodePointMods and CodePointMainIndices
 	err = parser.AdvanceBytes(int(numMappingEntries)*7)

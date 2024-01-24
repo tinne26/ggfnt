@@ -115,6 +115,8 @@ The `LowercaseAscent` should be set to 0 when no lowercase version of the letter
 
 If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), parsing should immediately return an error. That being said, not all verifications are cheap, so font parsers might offer options or additional methods to check the correctness of the font with different degrees of strictness.
 
+TODO: are we sure any error should be reported? If we do glyph animations, in some cases we might break some rules, and it's not so clear that the parser should complain about it. Having explicit exceptions doesn't sound super clean, but might be better than nothing..?
+
 ### Glyphs data
 
 ```Golang
@@ -163,19 +165,20 @@ Names must conform to `basic-name-regexp`. Names aren't meant to support naming 
 
 Actual coloring table:
 ```Golang
-NumDyes uint8 // should virtually always be at least 1
+NumDyes uint8 // should virtually always be at least 1. max is 254, as 255 can't be referenced
 DyeNameEndOffsets [NumDyes]uint16
 DyeNames blob[noLenString] // first dye should be named "main". must match basic-name-regexp
 
 // predefined palettes
-NumPalettes uint8 // value 255 not allowed, palette 255 is reserved for default alpha
+NumPalettes uint8 // can't be zero
+PaletteDyes [NumPalettes]uint8 // use zero for no dye
 PaletteEndOffsets [NumPalettes]uint16
 Palettes blob[[...](uint8, uint8, uint8, uint8)]
 PaletteNameEndOffsets [NumPalettes]uint16
 PaletteNames blob[noLenString] // must match basic-name-regexp or ""
 
 // definable sections
-NumSections uint8
+NumSections uint8 // can't be zero
 SectionStarts [NumSections]uint8 // inclusive
 SectionsEnd uint8 // inclusive
 SectionNameEndOffsets [NumSections]uint16
@@ -214,24 +217,24 @@ Variables are used for conditional or variable `code point -> rune` mappings and
 Every font needs a mapping section in order to indicate which glyph indices correspond to each unicode code point.
 
 ```Golang
-NumMappingEntries uint32
 NumMappingModes uint8 // typically 0. default mode is 255. max is 254
 MappingModeRoutineEndOffsets [NumMappingModes]uint16
 MappingModeRoutines blob[[...]uint8]
 
 FastMappingTables short[]FastMappingTable // see FastMappingTable section, prioritized over the general mapping table
 
+NumMappingEntries uint16
 CodePointList [NumMappingEntries]int32 // we do the binary search here if no fast table was relevant
 CodePointModes [NumMappingEntries]uint8
-CodePointMainIndices [NumMappingEntries]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices otherwise
-CodePointModeIndices []uint16
+CodePointMainIndices [NumMappingEntries]uint16 // mode == 255 ? glyphIndex : CodePointModeIndices end index (exclusive)
+CodePointModeIndices []uint16 // max 64 indices per code point
 ```
 
 At the most basic level, mapping can be done by assigning mode 255 to every entry, which is a special mode that indicates that a code point maps unconditionally to a single glyph index.
 
 The remaining modes, from 0 to 254, can be customly defined to enable a variety of features:
 - Stylistic alternates. This can include randomized variations, dialectal glyph variations (for game flavor mostly), conditional font glyph stylizations, etc.
-- Animated glyphs. This is uncommon for regular letters, but games can often benefit from textual cursors, small input icons and other small animated elements that can often be part of the text.
+- Animated glyphs. Games can often benefit from textual cursors, small input icons and other small animated elements that are part of the text. For letters themselves it's more uncommon, but falling blood, letters breaking, rotations and many others are also totally possible.
 - Feature flags:
 	- Small caps (lowercase displayed as smaller uppercase) (should be named "small-caps").
 	- Squeezing capital letters when they have accents.
@@ -277,6 +280,13 @@ Parametrization bits for quick conditional operation (prototype, undecided):
 0b00XX_0000: comparison operator (00 = "==", 01 = "!=", 10 = "<", 11 = "<=")
 ```
 
+Notice that when `CodePointMainIndices` is indexing `CodePointModeIndices` in `mode != 255`, the offset is not in bytes like in most other tables throughout the spec, but elements (`uint16`).
+
+Misc. technical notes:
+- While glyph index overlap would be possible while indexing `CodePointModeIndices`, it leads to all kinds of unnecessary complications, so don't think about it.
+- Technically the max 64 glyphs per code point can be bypassed by making the glyph appear in one or more fast mapping tables and/or the final main mapping table. This is ok, we don't enforce a *total* max 64 glyphs per code point.
+- NumMappingEntries was initially uint32, but then I reasoned that while it's true that you can have multiple code points mapped to a single glyph (e.g. lowercase and uppercase, different ideographic symbols like triangles mapped to a single triangle glyph, etc), these would generally derive from bad practices and seem quite unrealistic. It's much more reasonable to hit other limits first.
+
 ##### FastMappingTable
 
 Fast mapping tables are designed to avoid binary searches on common contiguous regions of unicode code points. The most common case is ASCII range 32 - 126. There can be some unused code points in the middle, and they should have 56789 ("missing" control index) assigned to them.
@@ -286,8 +296,8 @@ TableCondition MappingTableCondition
 StartCodePoint int32 // inclusive (int32 = rune)
 EndCodePoint   int32 // exclusive (int32 = rune)
 CodePointModes [TableLength]uint8
-CodePointMainIndices [TableLength]uint16 // glyph indices if mode == 255, or offsets to CodePointModeIndices otherwise
-CodePointModeIndices []uint16
+CodePointMainIndices [TableLength]uint16 // mode == 255 ? glyphIndex : CodePointModeIndices end index (exclusive)
+CodePointModeIndices []uint16 // max 64 indices per code point
 ```
 
 Mapping table condition:
@@ -297,7 +307,7 @@ FirstArgData  uint8
 SecondArgData uint8
 ```
 
-Parsers must limit the *total* fast mapping tables memory usage to 8KiB. Table lengths must also be strictly limited to less or equal than 1024. Anything above a few hundred contiguous code points tends to be suspicious anyway.
+Parsers must limit the *total* fast mapping tables memory usage to 32KiB. Table lengths must also be strictly limited to less or equal than 1000. Anything above a few hundred contiguous code points tends to be suspicious anyway.
 
 ### FSMs
 
@@ -332,20 +342,20 @@ Signature:
 ```
 
 ```Golang
+FontID uint64
 NumCategories uint8
 CategoryNames [NumCategories]shortString // max 60 chars for the name
 CategorySizes [NumCategories]uint16 // number of glyphs per category. total sum must equal NumGlyphs
 
-NumKerningClasses uint16
+NumKerningClasses uint16 // classes are one-indexed
 KerningClassNames [NumKerningClasses]shortString // must conform to basic-name-regex (+ possible spaces)
 KerningClassValues [NumKerningClasses]int8
 
 NumHorzKerningPairsWithClasses uint32
-HorzKerningPairsWithClasses [NumHorzKerningPairsWithClasses]uint32 // glyphPair binary search slice
-HorzKerningPairClasses [NumHorzKerningPairsWithClasses]uint16
+HorzKerningPairs [NumHorzKerningPairsWithClasses](first, second uint16, class uint16)
+
 NumVertKerningPairsWithClasses uint32
-VertKerningPairsWithClasses [NumVertKerningPairsWithClasses]uint32
-VertKerningPairClasses [NumVertKerningPairsWithClasses]uint16
+VertKerningPairs [NumVertKerningPairsWithClasses](first, second uint16, class uint16)
 
 MappingModeNames short[]shortString // must conform to basic-name-regex (+ possible spaces)
 ```

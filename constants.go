@@ -1,6 +1,10 @@
 package ggfnt
 
-const MaxSize = (32 << 20)
-const maxFastMappingTablesSize = (8 << 10)
+const MaxFontDataSize = (32 << 20) // check both total file size and after uncompressing without signature
 const FormatVersion = 0x0000_00001
 const MaxGlyphs = 56789
+
+const maxFastMappingTablesSize = (32 << 10)
+const maxFastMappingTableCodePoints = 1000
+const maxFastMappingTableCodePointsStr = "1000"
+const maxGlyphsPerCodePoint = 64

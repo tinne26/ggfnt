@@ -40,9 +40,9 @@ type Font struct {
 	offsetToColoringSections uint32
 	offsetToColoringSectionOptions uint32
 	offsetToVariables uint32
-	offsetToMappings uint32
+	offsetToMappingModes uint32
 	offsetsToFastMapTables []uint32
-	offsetToCodePointList uint32 // part of mappings table
+	offsetToMainMappings uint32 // part of mappings table
 	offsetToHorzKernings uint32
 	offsetToVertKernings uint32
 }
@@ -209,6 +209,7 @@ type ColorSectionKey uint8
 type Palette struct {
 	key PaletteKey
 	name string // build with unsafe?
+	dye DyeKey // 0 means no dye
 	colors []byte
 }
 func (self *Palette) Name() string { return self.name }

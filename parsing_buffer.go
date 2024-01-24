@@ -56,7 +56,7 @@ func (self *parsingBuffer) readMore() error {
 		n, err := self.gzipReader.Read(self.tempBuff)
 		if n > 0 {
 			self.bytes = growSliceByN(self.bytes, n)
-			if len(self.bytes) > MaxSize {
+			if len(self.bytes) > MaxFontDataSize {
 				return self.NewError("font data size exceeds limit")
 			}
 			k := copy(self.bytes[: len(self.bytes) - n], self.tempBuff[ : n])

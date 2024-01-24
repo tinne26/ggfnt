@@ -84,12 +84,18 @@ func appendUint16LE(buffer []byte, value uint16) []byte {
 	return append(buffer, byte(value), byte(value >> 8))
 }
 
+func encodeUint16LE(buffer []byte, value uint16) {
+	if len(buffer) < 2 { panic("invalid usage of encodeUint16LE") }
+	buffer[0] = byte(value)
+	buffer[1] = byte(value >> 8)
+}
+
 func appendUint32LE(buffer []byte, value uint32) []byte {
 	return append(buffer, byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24))
 }
 
-func encodeUint32(buffer []byte, value uint32) {
-	if len(buffer) < 4 { panic("invalid usage of encodeUint32") }
+func encodeUint32LE(buffer []byte, value uint32) {
+	if len(buffer) < 4 { panic("invalid usage of encodeUint32LE") }
 	buffer[0] = byte(value)
 	buffer[1] = byte(value >>  8)
 	buffer[2] = byte(value >> 16)
@@ -104,12 +110,12 @@ func appendUint64LE(buffer []byte, value uint64) []byte {
 	)
 }
 
-func appendShortString(buffer []byte, str string) ([]byte, error) {
-	if len(str) > 255 { return buffer, errors.New("can't append string with len() > 255") }
-	return append(append(buffer, uint8(len(str))), str...), nil
+func appendShortString(buffer []byte, str string) []byte {
+	if len(str) > 255 { panic("appendShortString() can't append string with len() > 255") }
+	return append(append(buffer, uint8(len(str))), str...)
 }
 
-func appendString(buffer []byte, str string) ([]byte, error) {
-	if len(str) > 65535 { return buffer, errors.New("can't append string with len() > 65535") }
-	return append(appendUint16LE(buffer, uint16(len(str))), str...), nil
+func appendString(buffer []byte, str string) []byte {
+	if len(str) > 65535 { panic("appendString() can't append string with len() > 65535") }
+	return append(appendUint16LE(buffer, uint16(len(str))), str...)
 }
