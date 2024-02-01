@@ -8,3 +8,4 @@ const maxFastMappingTablesSize = (32 << 10)
 const maxFastMappingTableCodePoints = 1000
 const maxFastMappingTableCodePointsStr = "1000"
 const maxGlyphsPerCodePoint = 64
+const minEntropyID = 0.26

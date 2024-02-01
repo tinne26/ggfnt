@@ -25,7 +25,7 @@ type editionKerningClass struct {
 
 type glyphData struct {
 	Name string // can be empty
-	Bounds GlyphBounds
+	Placement GlyphPlacement
 	Mask *image.Alpha
 }
 

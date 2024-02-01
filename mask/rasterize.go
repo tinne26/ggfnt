@@ -12,5 +12,6 @@ func Rasterize(rasterOps []byte) (*image.Alpha, error) {
 // The returned bool is true if the mask is empty.
 func computeRasterOpsRect(ops []byte) (image.Rectangle, bool) {
 	rect := image.Rect(math.MaxInt, math.MaxInt, math.MinInt, math.MinInt)
+	_ = rect
 	panic("unimplemented")
 }

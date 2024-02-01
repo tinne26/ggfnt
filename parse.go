@@ -1,9 +1,12 @@
 package ggfnt
 
+import "fmt"
 import "io"
 import "io/fs"
 import "slices"
 import "errors"
+
+const traceParsing = false
 
 // Utility method for parsing from a fs.FS, like when using embed.
 func ParseFS(filesys fs.FS, filename string) (*Font, error) {
@@ -26,6 +29,8 @@ func Parse(reader io.Reader) (*Font, error) {
 	parser.InitBuffers()
 	parser.fileType = "ggfnt"
 
+	if traceParsing { fmt.Printf("starting parsing...\n") }
+
 	// read signature first (this is not gzipped, so it's important)
 	n, err := reader.Read(parser.tempBuff[0 : 6])
 	if err != nil || n != 6 {
@@ -40,6 +45,7 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- header ---
+	if traceParsing { fmt.Printf("parsing header...\n") }
 	err = parser.AdvanceBytes(28)
 	if err != nil { return &font, err }
 	for i := 0; i < 3; i++ {
@@ -54,8 +60,9 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- metrics ---
+	if traceParsing { fmt.Printf("parsing metrics... (index = %d)\n", parser.index) }
 	font.offsetToMetrics = uint32(parser.index)
-	err = parser.AdvanceBytes(13)
+	err = parser.AdvanceBytes(14)
 	if err != nil { return &font, err }
 
 	font.data = parser.bytes // possible slice reallocs
@@ -63,11 +70,12 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- glyphs ---
+	if traceParsing { fmt.Printf("parsing glyphs... (index = %d)\n", parser.index) }
 	font.offsetToGlyphNames = uint32(parser.index)
 	numNamedGlyphs, err := parser.ReadUint16()
 	if err != nil { return &font, err }
 	
-	numGlyphs := font.Header().NumGlyphs()
+	numGlyphs := font.Metrics().NumGlyphs()
 	hasVertLayout := font.Metrics().HasVertLayout()
 
 	// (named glyphs)
@@ -97,9 +105,9 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, err }
 	glyphMasksLen, err := parser.ReadUint32()
 	if err != nil { return &font, err }
-	boundsSize := 4
-	if hasVertLayout { boundsSize += 3 }
-	if glyphMasksLen > (uint32(boundsSize) + 255)*uint32(numGlyphs) {
+	placementSize := 1
+	if hasVertLayout { placementSize += 3 }
+	if glyphMasksLen > (uint32(placementSize) + 255)*uint32(numGlyphs) {
 		return &font, parser.NewError("GlyphMaskEndOffsets declares GlyphMasks to end beyond allowed")
 	}
 	err = parser.AdvanceBytes(int(glyphMasksLen))
@@ -110,88 +118,50 @@ func Parse(reader io.Reader) (*Font, error) {
 	err = font.Glyphs().Validate(FmtDefault)
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
-	// --- coloring ---
-	font.offsetToColoring = uint32(parser.index)
-	numDyes, err := parser.ReadUint8()
+	// --- color sections ---
+	if traceParsing { fmt.Printf("parsing color sections... (index = %d)\n", parser.index) }
+	font.offsetToColorSections = uint32(parser.index)
+	numColorSections, err := parser.ReadUint8()
 	if err != nil { return &font, err }
-	if numDyes > 0 {
-		err = parser.AdvanceBytes(int(numDyes - 1)*2) // advance DyeNameEndOffsets
-		if err != nil { return &font, err }
-		dyeNamesLen, err := parser.ReadUint16()
-		if err != nil { return &font, err }
-		if dyeNamesLen > uint16(numDyes)*32 {
-			return &font, parser.NewError("DyeNameEndOffsets declares DyeNames to end beyond allowed")
-		}
+	if numColorSections == 0 { parser.NewError("NumColorSections must be at least 1") }
 
-		err = parser.AdvanceBytes(int(dyeNamesLen))
-		if err != nil { return &font, err }
-	}
-
-	// predefined palettes
-	font.offsetToColoringPalettes = uint32(parser.index)
-	numPalettes, err := parser.ReadUint8()
+	err = parser.AdvanceBytes(int(numColorSections)) // advance ColorSectionModes
 	if err != nil { return &font, err }
-	if numPalettes > 0 {
-		err = parser.AdvanceBytes(int(numPalettes - 1)*2) // advance PaletteEndOffsets
-		if err != nil { return &font, err }
-		palettesLen, err := parser.ReadUint16()
-		if err != nil { return &font, err }
-		if uint32(palettesLen) > uint32(numPalettes)*255*4 {
-			return &font, parser.NewError("PaletteEndOffsets declares Palettes to end beyond allowed")
-		}
-		err = parser.AdvanceBytes(int(palettesLen)) // advance Palettes
-		if err != nil { return &font, err }
-		
-		font.offsetToColoringPaletteNames = uint32(parser.index)
-		err = parser.AdvanceBytes(int(numPalettes - 1)*2) // advance PaletteNameEndOffsets
-		if err != nil { return &font, err }
-		paletteNamesLen, err := parser.ReadUint16()
-		if err != nil { return &font, err }
-		if paletteNamesLen > uint16(numPalettes)*32 {
-			return &font, parser.NewError("PaletteNameEndOffsets declares PaletteNames to end beyond allowed")
-		}
-		err = parser.AdvanceBytes(int(paletteNamesLen)) // advance PaletteNames
-		if err != nil { return &font, err }
-	} else { // numPalettes == 0
-		font.offsetToColoringPaletteNames = uint32(parser.index) // this is actually meaningless
-	}
-
-	// coloring sections
-	font.offsetToColoringSections = uint32(parser.index)
-	numColoringSections, err := parser.ReadUint8()
+	err = parser.AdvanceBytes(int(numColorSections - 1)) // advance ColorSectionStarts
 	if err != nil { return &font, err }
-	if numColoringSections > 0 {
-		// advance SectionStarts, SectionsEnd and SectionsNameEndOffsets - 1
-		advance := int(numColoringSections) + 1 + int(numColoringSections - 1)*2
-		err = parser.AdvanceBytes(advance)
-		if err != nil { return &font, err }
-		sectionNamesLen, err := parser.ReadUint16()
-		if err != nil { return &font, err }
-		if sectionNamesLen > uint16(numColoringSections)*32 {
-			return &font, parser.NewError("SectionNameEndOffsets declares SectionNames to end beyond allowed")
-		}
-		err = parser.AdvanceBytes(int(sectionNamesLen))
-		if err != nil { return &font, err }
-		
-		font.offsetToColoringSectionOptions = uint32(parser.index)
-		err = parser.AdvanceBytes(int(numColoringSections - 1)*2) // advance SectionOptionEndOffsets - 1
-		if err != nil { return &font, err }
-		sectionOptionsLen, err := parser.ReadUint16()
-		if err != nil { return &font, err }
-		if sectionOptionsLen > uint16(numColoringSections)*16 {
-			return &font, parser.NewError("SectionOptionEndOffsets declares SectionOptions to end beyond allowed")
-		}
-		err = parser.AdvanceBytes(int(sectionOptionsLen)) // advance SectionOptions
-	} else { // numColoringSections == 0
-		font.offsetToColoringSectionOptions = uint32(parser.index) // this is actually meaningless
+	lastRangeStart, err := parser.ReadUint8()
+	if err != nil { return &font, err }
+	if lastRangeStart == 0 { return &font, parser.NewError("ColorSectionStarts can't reach 0") }
+	numColors := (255 - lastRangeStart) + 1
+	err = parser.AdvanceBytes(int(numColorSections - 1)*2) // advance ColorSectionEndOffsets
+	if err != nil { return &font, err }
+	colorSectionsLen, err := parser.ReadUint16()
+	if err != nil { return &font, err }
+	if colorSectionsLen > uint16(numColors)*4 {
+		return &font, parser.NewError("ColorSectionEndOffsets declares ColorSections to end beyond allowed")
 	}
+	err = parser.AdvanceBytes(int(colorSectionsLen)) // skip color sections
+	if err != nil { return &font, err }
+
+	// (color section names)
+	font.offsetToColorSectionNames = uint32(parser.index)
+	err = parser.AdvanceBytes(int(numColorSections - 1)*2) // advance ColorSectionNameEndOffsets
+	if err != nil { return &font, err }
+	sectionNamesLen, err := parser.ReadUint16()
+	if err != nil { return &font, err }
+	if sectionNamesLen > uint16(numColorSections)*32 {
+		return &font, parser.NewError("ColorSectionNameEndOffsets declares ColorSectionNames to end beyond allowed")
+	}
+	err = parser.AdvanceBytes(int(sectionNamesLen)) // advance ColorSectionNames
+	if err != nil { return &font, err }
 	
 	font.data = parser.bytes // possible slice reallocs
-	err = font.Coloring().Validate(FmtDefault)
+	err = font.Color().Validate(FmtDefault)
 	if err != nil { return &font, parser.NewError(err.Error()) }
 	
 
 	// --- variables ---
+	if traceParsing { fmt.Printf("parsing variables... (index = %d)\n", parser.index) }
 	font.offsetToVariables = uint32(parser.index)
 	numVars, err := parser.ReadUint8()
 	if err != nil { return &font, err }
@@ -222,6 +192,7 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- mappings ---
+	if traceParsing { fmt.Printf("parsing mappings... (index = %d)\n", parser.index) }
 	font.offsetToMappingModes = uint32(parser.index)
 
 	numMappingModes, err := parser.ReadUint8()
@@ -281,11 +252,10 @@ func Parse(reader io.Reader) (*Font, error) {
 
 	// main mapping table
 	font.offsetToMainMappings = uint32(parser.index)
-
 	numMappingEntries, err := parser.ReadUint16()
 	if err != nil { return &font, err }
 
-	// advance CodePointList, CodePointMods and CodePointMainIndices
+	// advance CodePointList, CodePointModes and CodePointMainIndices
 	err = parser.AdvanceBytes(int(numMappingEntries)*7)
 	if err != nil { return &font, err }
 	codePointModeIndicesLen, err := parser.ReadUint16()
@@ -301,6 +271,7 @@ func Parse(reader io.Reader) (*Font, error) {
 	// ... (not designed yet)
 
 	// --- kerning ---
+	if traceParsing { fmt.Printf("parsing kernings... (index = %d)\n", parser.index) }
 	font.offsetToHorzKernings = uint32(parser.index)
 	maxKerningPairs := uint32(numGlyphs)*uint32(numGlyphs)
 
@@ -332,11 +303,13 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- EOF ---
+	if traceParsing { fmt.Printf("testing EOF... (index = %d)\n", parser.index) }
 	// ensure we reach EOF exactly at the right time
 	err = parser.EnsureEOF()
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// everything went well
+	if traceParsing { fmt.Printf("parsing correct!\n") }
 	return &font, nil
 }
 

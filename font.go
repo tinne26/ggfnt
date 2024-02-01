@@ -1,8 +1,11 @@
 package ggfnt
 
+import "io"
 import "errors"
 import "image"
 import "image/color"
+import "compress/gzip"
+import "unsafe"
 
 // A [Font] is a read-only object that contains all the data required to
 // use a font. To create a [Font], we use the [Parse]() method.
@@ -12,20 +15,10 @@ import "image/color"
 //  - Use [Font.Header]() to access information about the [FontHeader].
 //  - Use [Font.Metrics]() to access information about the [FontMetrics].
 //  - Use [Font.Glyphs]() to access information about the [FontGlyphs].
-//  - Use [Font.Coloring]() to access information about the [FontColoring].
+//  - Use [Font.Color]() to access information about the [FontColor].
 //  - Use [Font.Vars]() to access information about the [FontVariables].
 //  - Use [Font.Mapping]() to access information about the [FontMapping].
 //  - Use [Font.Kerning]() to access information about the [FontKerning].
-// 
-// Additional structures for storing the font tend to result in around 12 64-bit
-// words (96 bytes) of memory overhead compared to the data in the font itself,
-// plus the [Parametrization], which are another 8 64-bit words plus as many bytes
-// as variables there are in the font. On average this is around 22 64-bit words
-// (176 bytes).
-//
-// Fonts themselves, once uncompressed, tend to take around XXX_KiB on average,
-// but it depends a lot on the number of glyphs, features, glyph size and overall
-// complexity.
 type Font struct {
 	data []byte // already ungzipped, starting from HEADER (signature is ignored)
 
@@ -34,11 +27,8 @@ type Font struct {
 	offsetToMetrics uint32
 	offsetToGlyphNames uint32
 	offsetToGlyphMasks uint32
-	offsetToColoring uint32
-	offsetToColoringPalettes uint32
-	offsetToColoringPaletteNames uint32
-	offsetToColoringSections uint32
-	offsetToColoringSectionOptions uint32
+	offsetToColorSections uint32
+	offsetToColorSectionNames uint32
 	offsetToVariables uint32
 	offsetToMappingModes uint32
 	offsetsToFastMapTables []uint32
@@ -49,24 +39,16 @@ type Font struct {
 
 // --- general methods ---
 
-// Returns a [Parametrization] for the font, which can store variables,
-// scale and other values that can change at runtime but are still related
-// to the font.
-func (self *Font) Parametrize() *Parametrization {
-	var parametrization Parametrization
-	vars := self.Vars()
+func (self *Font) Export(writer io.Writer) error {
+	n, err := writer.Write([]byte{'t', 'g', 'g', 'f', 'n', 't'})
+	if err != nil { return err }
+	if n != 6 { return errors.New("short write") }
 
-	parametrization.font = self
-	parametrization.variables = make([]uint8, int(vars.Count()))
-	for i := uint8(0); i < vars.Count(); i++ {
-		parametrization.variables[i] = vars.GetInitValue(VarKey(i))
-	}
-	parametrization.customGlyphs = nil
-	parametrization.scale = 1
-	parametrization.interVertShift = 0
-	parametrization.interHorzShift = 0
-	
-	return &parametrization
+	gzipWriter := gzip.NewWriter(writer)
+	n, err = gzipWriter.Write(self.data)
+	if err != nil { return err }
+	if n != len(self.data) { return errors.New("short write") }
+	return gzipWriter.Close()
 }
 
 // TODO: don't worry about this until actually implementing validation, I'll
@@ -86,6 +68,8 @@ func (self *Font) Validate(mode FmtValidation) error {
 	if err != nil { return err }
 	err = self.Glyphs().Validate(mode)
 	if err != nil { return err }
+	err = self.Color().Validate(mode)
+	if err != nil { return err }
 	err = self.Vars().Validate(mode)
 	if err != nil { return err }
 	err = self.Mapping().Validate(mode)
@@ -101,7 +85,7 @@ func (self *Font) Validate(mode FmtValidation) error {
 func (self *Font) Header() *FontHeader { return (*FontHeader)(self) }
 func (self *Font) Metrics() *FontMetrics { return (*FontMetrics)(self) }
 func (self *Font) Glyphs() *FontGlyphs { return (*FontGlyphs)(self) }
-func (self *Font) Coloring() *FontColoring { return (*FontColoring)(self) }
+func (self *Font) Color() *FontColor { return (*FontColor)(self) }
 func (self *Font) Vars() *FontVariables { return (*FontVariables)(self) }
 func (self *Font) Mapping() *FontMapping { return (*FontMapping)(self) }
 func (self *Font) Kerning() *FontKerning { return (*FontKerning)(self) }
@@ -109,24 +93,55 @@ func (self *Font) Kerning() *FontKerning { return (*FontKerning)(self) }
 // --- header section ---
 
 type FontHeader Font
-func (self *FontHeader) FormatVersion() uint32 { panic("unimplemented") }
-func (self *FontHeader) ID() uint64 { panic("unimplemented") }
-func (self *FontHeader) VersionMajor() uint16 { panic("unimplemented") }
-func (self *FontHeader) VersionMinor() uint16 { panic("unimplemented") }
-func (self *FontHeader) FirstVersionDate() (year uint16, month, day uint8) { panic("unimplemented") }
-func (self *FontHeader) MajorVersionDate() (year uint16, month, day uint8) { panic("unimplemented") }
-func (self *FontHeader) MinorVersionDate() (year uint16, month, day uint8) { panic("unimplemented") }
-func (self *FontHeader) NumGlyphs() uint16 { panic("unimplemented") }
-func (self *FontHeader) Name() string { panic("unimplemented") }
-func (self *FontHeader) Family() string { panic("unimplemented") }
-func (self *FontHeader) Author() string { panic("unimplemented") }
-func (self *FontHeader) About() string { panic("unimplemented") }
+func (self *FontHeader) FormatVersion() uint32 {
+	return decodeUint32LE(self.data[0 : 4])
+}
+func (self *FontHeader) ID() uint64 {
+	return decodeUint64LE(self.data[4 : 12])
+}
+func (self *FontHeader) VersionMajor() uint16 {
+	return decodeUint16LE(self.data[12 : 14])
+}
+func (self *FontHeader) VersionMinor() uint16 {
+	return decodeUint16LE(self.data[14 : 16])
+}
+func (self *FontHeader) FirstVersionDate() Date {
+	return decodeDate(self.data[16 : 20])
+}
+func (self *FontHeader) MajorVersionDate() Date {
+	return decodeDate(self.data[20 : 24])
+}
+func (self *FontHeader) MinorVersionDate() Date {
+	return decodeDate(self.data[24 : 28])
+}
+func (self *FontHeader) Name() string {
+	nameLen := self.data[28]
+	return unsafe.String(&self.data[29], nameLen)
+}
+func (self *FontHeader) Family() string {
+	nameLen   := self.data[28]
+	familyLen := self.data[29 + nameLen]
+	return unsafe.String(&self.data[30 + nameLen], familyLen)
+}
+func (self *FontHeader) Author() string {
+	nameLen   := self.data[28]
+	familyLen := self.data[29 + nameLen]
+	authorLen := self.data[30 + nameLen + familyLen]
+	return unsafe.String(&self.data[31 + nameLen + familyLen], authorLen)
+}
+func (self *FontHeader) About() string {
+	nameLen   := self.data[28]
+	familyLen := self.data[29 + nameLen]
+	authorLen := self.data[30 + nameLen + familyLen]
+	aboutIndex := 31 + nameLen + familyLen + authorLen
+	aboutLen := decodeUint16LE(self.data[aboutIndex : aboutIndex + 2])
+	return unsafe.String(&self.data[33 + nameLen + familyLen + authorLen], aboutLen)
+}
 
 func (self *FontHeader) Validate(mode FmtValidation) error {
 	// default checks
 	if self.FormatVersion() != FormatVersion { return errors.New("invalid FormatVersion") }
-	if lazyEntropyUint64(self.ID()) < 0.26 { return errors.New("font ID entropy too low") }
-	if self.NumGlyphs() == 0 { return errors.New("font must define at least one glyph") }
+	if lazyEntropyUint64(self.ID()) < minEntropyID { return errors.New("font ID entropy too low") }
 	if self.Name() == "" { return errors.New("font name can't be empty") }
 
 	// strict checks
@@ -140,27 +155,52 @@ func (self *FontHeader) Validate(mode FmtValidation) error {
 // --- metrics section ---
 
 type FontMetrics Font
-func (self *FontMetrics) HasVertLayout() bool { panic("unimplemented") }
+func (self *FontMetrics) NumGlyphs() uint16 {
+	return decodeUint16LE(self.data[self.offsetToMetrics + 0 : self.offsetToMetrics + 2])
+}
+func (self *FontMetrics) HasVertLayout() bool {
+	return self.data[self.offsetToMetrics + 2] == 1
+}
 func (self *FontMetrics) Monospaced() bool { return self.MonoWidth() != 0 }
-func (self *FontMetrics) VertMonospaced() bool { return self.HasVertLayout() && self.MonoHeight() != 0 }
-func (self *FontMetrics) MonoWidth() uint8 { panic("unimplemented") }
-func (self *FontMetrics) MonoHeight() uint8 { panic("unimplemented") }
-func (self *FontMetrics) Ascent() uint8 { panic("unimplemented") }
-func (self *FontMetrics) ExtraAscent() uint8 { panic("unimplemented") }
-func (self *FontMetrics) Descent() uint8 { panic("unimplemented") }
-func (self *FontMetrics) ExtraDescent() uint8 { panic("unimplemented") }
-func (self *FontMetrics) LowercaseAscent() uint8 { panic("unimplemented") }
-func (self *FontMetrics) HorzInterspacing() uint8 { panic("unimplemented") }
-func (self *FontMetrics) VertInterspacing() uint8 { panic("unimplemented") }
-func (self *FontMetrics) LineGap() uint8 { panic("unimplemented") }
+func (self *FontMetrics) MonoWidth() uint8 {
+	return self.data[self.offsetToMetrics + 3]
+}
+func (self *FontMetrics) Ascent() uint8 {
+	return self.data[self.offsetToMetrics + 4]
+}
+func (self *FontMetrics) ExtraAscent() uint8 {
+	return self.data[self.offsetToMetrics + 5]
+}
+func (self *FontMetrics) Descent() uint8 {
+	return self.data[self.offsetToMetrics + 6]
+}
+func (self *FontMetrics) ExtraDescent() uint8 {
+	return self.data[self.offsetToMetrics + 7]
+}
+func (self *FontMetrics) LowercaseAscent() uint8 {
+	return self.data[self.offsetToMetrics + 8]
+}
+func (self *FontMetrics) HorzInterspacing() uint8 {
+	return self.data[self.offsetToMetrics + 9]
+}
+func (self *FontMetrics) VertInterspacing() uint8 {
+	return self.data[self.offsetToMetrics + 10]
+}
+func (self *FontMetrics) LineGap() uint8 {
+	return self.data[self.offsetToMetrics + 11]
+}
+func (self *FontMetrics) VertLineWidth() uint8 {
+	return self.data[self.offsetToMetrics + 12]
+}
+func (self *FontMetrics) VertLineGap() uint8 {
+	return self.data[self.offsetToMetrics + 13]
+}
 
 func (self *FontMetrics) Validate(mode FmtValidation) error {
 	// default checks
+	if self.NumGlyphs() == 0 { return errors.New("font must define at least one glyph") }
 	err := boolErrCheck(self.data[self.offsetToMetrics + 2])
 	if err != nil { return err }
-	if self.MonoHeight() != 0 && !self.HasVertLayout() {
-		return errors.New("MonoHeight set without HasVertLayout")
-	}
 	if self.Ascent() == 0 { return errors.New("Ascent can't be zero") }
 	if self.ExtraAscent() > self.Ascent() {
 		return errors.New("ExtraAscent can't be bigger than Ascent")
@@ -180,11 +220,17 @@ func (self *FontMetrics) Validate(mode FmtValidation) error {
 // --- glyphs section ---
 
 type FontGlyphs Font
-func (self *FontGlyphs) Count() uint16 { return ((*Font)(self)).Header().NumGlyphs() } // alias for Header().NumGlyphs()
-func (self *FontGlyphs) NamedCount() uint16 { panic("unimplemented") }
+
+// Alias for Metrics().NumGlyphs()
+func (self *FontGlyphs) Count() uint16 {
+	return ((*Font)(self)).Metrics().NumGlyphs()
+}
+func (self *FontGlyphs) NamedCount() uint16 {
+	return decodeUint16LE(self.data[self.offsetToGlyphNames + 0 : self.offsetToGlyphNames + 2])
+}
 func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
 func (self *FontGlyphs) RasterizeMask(glyph GlyphIndex) *image.Alpha { panic("unimplemented") }
-func (self *FontGlyphs) Bounds(glyph GlyphIndex) GlyphBounds { panic("unimplemented") }
+func (self *FontGlyphs) Placement(glyph GlyphIndex) GlyphPlacement { panic("unimplemented") }
 
 func (self *FontGlyphs) Validate(mode FmtValidation) error {
 	// default checks
@@ -200,49 +246,36 @@ func (self *FontGlyphs) Validate(mode FmtValidation) error {
 	return nil
 }
 
-// --- coloring section ---
+// --- color section ---
 
-type DyeKey uint8
-type PaletteKey uint8
-type ColorSectionKey uint8
-
-type Palette struct {
-	key PaletteKey
-	name string // build with unsafe?
-	dye DyeKey // 0 means no dye
-	colors []byte
+type FontColor Font
+func (self *FontColor) EachDye(func(DyeKey, string)) {
+	// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
+	panic("unimplemented")
 }
-func (self *Palette) Name() string { return self.name }
-func (self *Palette) Key() PaletteKey { return self.key }
-func (self *Palette) Size() int { return len(self.colors) }
-func (self *Palette) EachColor(func(color.RGBA)) {
+func (self *FontColor) GetDyeRange(key DyeKey) (start, end uint8) {
 	panic("unimplemented")
 }
 
-type FontColoring Font
-func (self *FontColoring) NumDyes() uint8 { return self.data[self.offsetToColoring + 0] }
-func (self *FontColoring) DyeEntries(func(DyeKey, string)) { panic("unimplemented") }
-// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
-func (self *FontColoring) NumPalettes() uint8 { panic("unimplemented") }
-func (self *FontColoring) PaletteEntries(func(PaletteKey, string)) {
+func (self *FontColor) EachPalette(func(PaletteKey, string)) {
 	panic("unimplemented")
 }
-func (self *FontColoring) GetPalette(PaletteKey) (Palette, bool) {
-	panic("unimplemented")
-}
-func (self *FontColoring) NumSections() uint8 { panic("unimplemented") }
-func (self *FontColoring) SectionEntries(func(key ColorSectionKey, name string)) { panic("unimplemented") }
-func (self *FontColoring) SectionPalettes(ColorSectionKey, func(PaletteKey, string)) {
-	panic("unimplemented")
-}
-func (self *FontColoring) GetSectionRange(key ColorSectionKey) (inclusiveStart, inclusiveEnd uint8) {
-	panic("unimplemented")
-}
-func (self *FontColoring) SectionDefaultColors(func(index uint8, rgba color.RGBA)) {
+func (self *FontColor) EachPaletteColor(PaletteKey, func(color.RGBA)) {
 	panic("unimplemented")
 }
 
-func (self *FontColoring) Validate(mode FmtValidation) error {
+// An invalid palette key will always return (0, 0). A valid palette
+// key will always return start and ends > 0. Both start and end are
+// inclusive. Given a valid palette key, the size is (end - start + 1).
+func (self *FontColor) GetPaletteRange(key PaletteKey) (start, end uint8) {
+	panic("unimplemented")
+}
+
+func (self *FontColor) NumColors() uint8 {
+	panic("unimplemented") // (255 - ColorSectionStarts[last]) + 1
+}
+
+func (self *FontColor) Validate(mode FmtValidation) error {
 	// default checks
 	// ...
 
@@ -261,11 +294,16 @@ type VarKey uint8
 
 // Obtained through [Font.Variables]().
 // 
-// Variables can't be modified on the [*Font] object itself, the changing
-// data is always managed through a [*Parametrization].
+// Variables can't be modified on the [*Font] object itself, that
+// kind of state must be managed by a renderer or similar.
 type FontVariables Font
-func (self *FontVariables) Count() uint8 { panic("unimplemented") }
-func (self *FontVariables) NamedCount() uint8 { panic("unimplemented") }
+func (self *FontVariables) Count() uint8 {
+	return self.data[self.offsetToVariables]
+}
+func (self *FontVariables) NamedCount() uint8 {
+	index := self.offsetToVariables + 1 + uint32(self.Count())*3
+	return self.data[index]
+}
 func (self *FontVariables) FindIndexByName(name string) VarKey { panic("unimplemented") }
 func (self *FontVariables) GetInitValue(index VarKey) uint8 { panic("unimplemented") }
 func (self *FontVariables) GetRange(index VarKey) (minValue, maxValue uint8) { panic("unimplemented") }
@@ -301,6 +339,7 @@ func (self *FontMapping) Ascii(codePoint byte) GlyphIndex { panic("unimplemented
 func (self *FontMapping) Validate(mode FmtValidation) error {
 	// default checks
 	// ...
+	// TODO: check fast table ranges and conditions?
 
 	// strict checks
 	if mode == FmtStrict {
@@ -308,7 +347,6 @@ func (self *FontMapping) Validate(mode FmtValidation) error {
 		panic("unimplemented")
 	}
 
-	panic("unimplemented")
 	return nil
 }
 
@@ -331,6 +369,5 @@ func (self *FontKerning) Validate(mode FmtValidation) error {
 		panic("unimplemented")
 	}
 
-	panic("unimplemented")
 	return nil
 }

@@ -69,6 +69,11 @@ func decodeUint32LE(buffer []byte) uint32 {
 	       (uint32(buffer[2]) << 16) | (uint32(buffer[3]) << 24)
 }
 
+func decodeDate(buffer []byte) Date {
+	if len(buffer) < 4 { panic(len(buffer)) }
+	return Date{ Year: decodeUint16LE(buffer[0 : 2]), Month: uint8(buffer[2]), Day: uint8(buffer[3]) }
+}
+
 func decodeUint64LE(buffer []byte) uint64 {
 	if len(buffer) < 8 { panic(len(buffer)) }
 	return (uint64(buffer[0]) <<  0) | (uint64(buffer[1]) <<  8) | (uint64(buffer[2]) << 16) |

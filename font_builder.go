@@ -2,10 +2,17 @@ package ggfnt
 
 import "io"
 import "slices"
-import "time"
 import "errors"
+import "image/color"
+
+import "github.com/tinne26/ggfnt/mask"
 
 const invalidInternalState = "invalid internal state"
+const fontBuilderDefaultFontName = "Unnamed"
+const fontBuilderDefaultFontAuthor = "Authorless"
+const fontBuilderDefaultFontAbout = "No information available."
+
+var ErrBuildNoGlyphs = errors.New("can't build font with no glyphs")
 
 // A [Font] builder that allows modifying and exporting ggfnt fonts.
 // It can also store and edit glyph category names, kerning classes
@@ -15,27 +22,21 @@ const invalidInternalState = "invalid internal state"
 // This object should never replace a [Font] outside the edition context.
 type FontBuilder struct {
 	// ---- internal glyph UID mapping ----
-	glyphEditIDs map[uint16]uint64
+	glyphOrder []uint64
 
 	// ---- internal buffers to reduce allocations on operations ----
 	tempGlyphIndexLookup map[uint64]uint16
 	tempSortingBuffer []uint64
+	tempMaskEncoder mask.Encoder
 
 	// ---- font data ----
 	// header
-	formatVersion uint32
 	fontID uint64
 	versionMajor uint16
 	versionMinor uint16
-	firstVersionDateYear uint16
-	firstVersionDateMonth uint8
-	firstVersionDateDay uint8
-	majorVersionDateYear uint16
-	majorVersionDateMonth uint8
-	majorVersionDateDay uint8
-	minorVersionDateYear uint16
-	minorVersionDateMonth uint8
-	minorVersionDateDay uint8
+	firstVersionDate Date
+	majorVersionDate Date
+	minorVersionDate Date
 	fontName string
 	fontFamily string
 	fontAuthor string
@@ -44,7 +45,8 @@ type FontBuilder struct {
 	// metrics
 	hasVertLayout bool
 	monoWidth uint8
-	monoHeight uint8
+	monoHeightMin int8
+	monoHeightMax int8
 	ascent uint8
 	extraAscent uint8
 	descent uint8
@@ -53,17 +55,17 @@ type FontBuilder struct {
 	horzInterspacing uint8
 	vertInterspacing uint8
 	lineGap uint8
+	vertLineWidth uint8
+	vertLineGap uint8
 
 	// glyphs data
-	glyphsData map[uint64]*glyphData
+	glyphData map[uint64]*glyphData
 
-	// coloring
-	dyes []string
-	palettes []Palette
-	coloringSectionStarts []uint8 // prevent modification if any options are assigned
-	coloringSectionsEnd uint8 // inclusive
-	coloringSectionNames []string
-	coloringSectionOptions [][]uint8
+	// color sections
+	colorSectionModes []uint8
+	colorSectionStarts []uint8 // prevent modification if any options are assigned
+	colorSectionNames []string
+	colorSections [][]color.Color // either color.RGBA or color.Alpha
 
 	// variables
 	variables []variableEntry // removing is expensive and requires many checks and reports
@@ -92,27 +94,32 @@ type FontBuilder struct {
 func NewFontBuilder() *FontBuilder {
 	builder := &FontBuilder{}
 
+	// font ID random generation
+	var fontID uint64
+	var err error
+	const MaxRerolls = 8
+	for i := 1; i <= MaxRerolls; i++ {
+		fontID, err = cryptoRandUint64()
+		if err != nil { panic(err) } // I'm not sure this can ever happen
+		if lazyEntropyUint64(fontID) >= minEntropyID { break }
+		if i == MaxRerolls { panic("failed to generate font ID with sufficient entropy") }
+	}
+
+	// internal
+	builder.tempGlyphIndexLookup = make(map[uint64]uint16, 32)
+
 	// --- header ---
-	builder.formatVersion = FormatVersion
-	fontID, err := cryptoRandUint64()
-	if err != nil { panic(err) } // I'm not sure this can ever happen
 	builder.fontID = fontID
 	builder.versionMajor = 0
 	builder.versionMinor = 1
-	year, month, day := time.Now().Date()
-	builder.firstVersionDateYear = uint16(year)
-	builder.majorVersionDateYear = uint16(year)
-	builder.minorVersionDateYear = uint16(year)
-	builder.firstVersionDateMonth = uint8(month)
-	builder.majorVersionDateMonth = uint8(month)
-	builder.minorVersionDateMonth = uint8(month)
-	builder.firstVersionDateDay = uint8(day)
-	builder.majorVersionDateDay = uint8(day)
-	builder.minorVersionDateDay = uint8(day)
-	builder.fontName = "Unnamed"
-	builder.fontFamily = "Unnamed"
-	builder.fontAuthor = "Authorless"
-	builder.fontAbout = "No information available."
+	date := CurrentDate()
+	builder.firstVersionDate = date
+	builder.majorVersionDate = date
+	builder.minorVersionDate = date
+	builder.fontName = fontBuilderDefaultFontName
+	builder.fontFamily = fontBuilderDefaultFontName
+	builder.fontAuthor = fontBuilderDefaultFontAuthor
+	builder.fontAbout = fontBuilderDefaultFontAbout
 
 	// --- metrics ---
 	builder.ascent = 9
@@ -123,34 +130,26 @@ func NewFontBuilder() *FontBuilder {
 	// (many omitted due to being 0)
 
 	// --- glyphs data ---
-	builder.glyphEditIDs = make(map[uint16]uint64, 32)
-	builder.glyphsData = make(map[uint64]*glyphData, 32)
+	builder.glyphOrder = make([]uint64, 0, 64)
+	builder.glyphData = make(map[uint64]*glyphData, 32)
 
-	// --- coloring ---
-	builder.dyes = []string{"main"}
-	builder.palettes = []Palette{
-		Palette{
-			key: 0,
-			name: "default",
-			colors: []byte{255, 255, 255, 255}, // pure white only
-		},
-	}
-	builder.coloringSectionStarts = []uint8{255}
-	builder.coloringSectionsEnd = 255
-	builder.coloringSectionNames = []string{"main"}
-	builder.coloringSectionOptions = [][]uint8{ []uint8{0} }
+	// --- color sections ---
+	builder.colorSectionModes = []uint8{0} // 0 for alpha scale (dye), 1 for palette
+	builder.colorSectionStarts = []uint8{255} // inclusive
+	builder.colorSectionNames = []string{"main"}
+	builder.colorSections = [][]color.Color{[]color.Color{color.Alpha{255}}} // either color.RGBA or color.Alpha
 
 	// variables
 	// (nothing to initialize here)
 
 	// mapping
-	// (nothing to initialize here)
+	builder.runeMapping = make(map[rune]codePointMapping, 32)
 
 	// kerning
 	builder.horzKerningPairs = make(map[[2]uint64]*editionKerningPair)
 	builder.vertKerningPairs =make(map[[2]uint64]*editionKerningPair)
 
-	panic("unimplemented")
+	return builder
 }
 
 // Creates a [FontBuilder] already initialized with the given font
@@ -173,33 +172,27 @@ func (self *FontBuilder) Build() (*Font, error) {
 	// data = append(data, 'w', 'k', 'g', 'f', 'n', 't')
 
 	// get num glyphs and check amount
-	if len(self.glyphsData) > MaxGlyphs { panic(invalidInternalState) } // "font has too many glyphs"
-	if len(self.glyphsData) == 0 { return nil, errors.New("can't build font with no glyphs") }
-	numGlyphs := uint16(len(self.glyphsData))
+	if len(self.glyphData) > MaxGlyphs { panic(invalidInternalState) } // "font has too many glyphs"
+	if len(self.glyphData) != len(self.glyphOrder) { panic(invalidInternalState) }
+	if len(self.glyphData) == 0 { return nil, ErrBuildNoGlyphs }
+	numGlyphs := uint16(len(self.glyphData))
 
 	// build temp glyph index lookup, it's sometimes used for glyph names,
 	// and it's often used for fast mapping tables and kernings, so we just
 	// compute it and call it a day
 	clear(self.tempGlyphIndexLookup)
-	for index, uid := range self.glyphEditIDs {
-		if int(index) >= len(self.glyphsData) { panic(invalidInternalState) } // "glyph ID exceeds NumGlyphs"
-		self.tempGlyphIndexLookup[uid] = index
+	for index, uid := range self.glyphOrder {
+		self.tempGlyphIndexLookup[uid] = uint16(index)
 	}
 
 	// --- header ---
-	data = appendUint32LE(data, self.formatVersion)
+	data = appendUint32LE(data, FormatVersion)
 	data = appendUint64LE(data, self.fontID)
 	data = appendUint16LE(data, self.versionMajor)
 	data = appendUint16LE(data, self.versionMinor)
-	data = appendUint16LE(data, self.firstVersionDateYear)
-	data = append(data, self.firstVersionDateMonth)
-	data = append(data, self.firstVersionDateDay)
-	data = appendUint16LE(data, self.majorVersionDateYear)
-	data = append(data, self.majorVersionDateMonth)
-	data = append(data, self.majorVersionDateDay)
-	data = appendUint16LE(data, self.minorVersionDateYear)
-	data = append(data, self.minorVersionDateMonth)
-	data = append(data, self.minorVersionDateDay)
+	data = self.firstVersionDate.appendTo(data)
+	data = self.majorVersionDate.appendTo(data)
+	data = self.minorVersionDate.appendTo(data)
 	data = appendShortString(data, self.fontName)
 	data = appendShortString(data, self.fontFamily)
 	data = appendShortString(data, self.fontAuthor)
@@ -210,7 +203,6 @@ func (self *FontBuilder) Build() (*Font, error) {
 	data = appendUint16LE(data, numGlyphs)
 	data = append(data, boolToUint8(self.hasVertLayout))
 	data = append(data, self.monoWidth)
-	data = append(data, self.monoHeight)
 	data = append(data, self.ascent)
 	data = append(data, self.extraAscent)
 	data = append(data, self.descent)
@@ -219,12 +211,14 @@ func (self *FontBuilder) Build() (*Font, error) {
 	data = append(data, self.horzInterspacing)
 	data = append(data, self.vertInterspacing)
 	data = append(data, self.lineGap)
+	data = append(data, self.vertLineWidth)
+	data = append(data, self.vertLineGap)
 
 	// --- glyphs data ---
 	numNamedGlyphs := uint16(0) // guaranteed to fit by construction (numGlyphs is <= MaxGlyphs)
 	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
-	for _, uid := range self.glyphEditIDs {
-		glyph, found := self.glyphsData[uid]
+	for _, uid := range self.glyphOrder {
+		glyph, found := self.glyphData[uid]
 		if !found { panic(invalidInternalState) }
 		if glyph.Name != "" {
 			numNamedGlyphs += 1
@@ -237,8 +231,8 @@ func (self *FontBuilder) Build() (*Font, error) {
 	if numNamedGlyphs > 0 {
 		// sort glyph uids by name
 		slices.SortFunc(self.tempSortingBuffer, func(a, b uint64) int {
-			nameA := self.glyphsData[self.tempSortingBuffer[a]].Name
-			nameB := self.glyphsData[self.tempSortingBuffer[b]].Name
+			nameA := self.glyphData[self.tempSortingBuffer[a]].Name
+			nameB := self.glyphData[self.tempSortingBuffer[b]].Name
 			if nameA < nameB { return -1 }
 			if nameA > nameB { return  1 }
 			return 0
@@ -248,11 +242,17 @@ func (self *FontBuilder) Build() (*Font, error) {
 		}
 		endOffset := uint32(0)
 		for _, glyphUID := range self.tempSortingBuffer { // GlyphNameEndOffsets
-			endOffset += uint32(len(self.glyphsData[glyphUID].Name))
+			endOffset += uint32(len(self.glyphData[glyphUID].Name))
 			data = appendUint32LE(data, endOffset)
 		}
+		var prevName string
 		for _, glyphUID := range self.tempSortingBuffer { // GlyphNames
-			data = append(data, self.glyphsData[glyphUID].Name...)
+			name := self.glyphData[glyphUID].Name
+			if name == prevName {
+				return nil, errors.New("duplicated glyph name '" + name + "'")
+			}
+			data = append(data, name...)
+			prevName = name
 		}
 	}
 
@@ -264,23 +264,17 @@ func (self *FontBuilder) Build() (*Font, error) {
 	baseGlyphMasksIndex := len(data)
 	for i := uint16(0); i < numGlyphs; i++ {
 		// safety checks
-		glyph := self.glyphsData[self.glyphEditIDs[i]]
-		w, h := glyph.Mask.Rect.Dx(), glyph.Mask.Rect.Dy()
-		if w != int(glyph.Bounds.MaskWidth) || h != int(glyph.Bounds.MaskHeight) {
-			panic(invalidInternalState) // "glyph mask does not match explicit bounds definition"
-		}
+		glyph := self.glyphData[self.glyphOrder[i]]
 		
-		// append mask bounds
+		// append glyph placement
 		if self.hasVertLayout {
-			data = glyph.Bounds.appendWithVertLayout(data)
+			data = glyph.Placement.appendWithVertLayout(data)
 		} else {
-			data = glyph.Bounds.appendWithoutVertLayout(data)
+			data = glyph.Placement.appendWithoutVertLayout(data)
 		}
 
 		// append mask data (expensive to process the masks!)
-		var err error
-		data, err = AppendMaskRasterOps(data, glyph.Mask)
-		if err != nil { return nil, err } // TODO: to be seen if this can really be an error
+		data = self.tempMaskEncoder.AppendRasterOps(data, glyph.Mask)
 
 		// write offset back on the relevant index
 		offset32 += uint32(len(data) - baseGlyphMasksIndex)
@@ -288,102 +282,59 @@ func (self *FontBuilder) Build() (*Font, error) {
 		glyphMaskEndOffsetsIndex += 4
 	}
 
-	// --- coloring ---
-	// dyes
-	if len(self.dyes) > 254 { panic(invalidInternalState) } // yes, max dye is 254, referenced as 255
-	font.offsetToColoring = uint32(len(data))
-	data = append(data, uint8(len(self.dyes)))
+	// --- color sections ---
+	if len(self.colorSectionModes) > 255 { panic(invalidInternalState) }
+	if len(self.colorSectionModes) != len(self.colorSectionStarts) { panic(invalidInternalState) }
+	if len(self.colorSectionModes) != len(self.colorSectionNames) { panic(invalidInternalState) }
+	if len(self.colorSectionModes) != len(self.colorSections) { panic(invalidInternalState) }
+	font.offsetToColorSections = uint32(len(data))
+	data = append(data, uint8(len(self.colorSectionModes))) // NumColorSections
+	data = append(data, self.colorSectionModes...) // ColorSectionModes
+	data = append(data, self.colorSectionStarts...) // ColorSectionStarts
+
 	var offset16 uint16
-	for _, name := range self.dyes { // DyeNameEndOffsets
-		if len(name) == 0 || len(name) > 32 { panic(invalidInternalState) }
-		offset16 += uint16(len(name))
-		data = appendUint16LE(data, offset16)
-	}
-	for _, name := range self.dyes { // DyeNames
-		data = append(data, name...)
-	}
-
-	// palettes
-	font.offsetToColoringPalettes = uint32(len(data))
-	if len(self.palettes) > 255 { panic(invalidInternalState) }
-	if len(self.palettes) == 0 { panic(invalidInternalState) }
-	data = append(data, uint8(len(self.palettes)))
-	for i := 0; i < len(self.palettes); i++ { // PaletteDyes
-		data = append(data, uint8(self.palettes[i].dye))
-	}
-	offset16 = 0
-	for i := 0; i < len(self.palettes); i++ { // PaletteEndOffsets
-		if len(self.palettes[i].colors) > 255 { panic(invalidInternalState) }
-		offset16 += uint16(len(self.palettes[i].colors))
-		data = appendUint16LE(data, offset16)
-	}
-	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
-	for i := uint64(0); i < uint64(len(self.palettes)); i++ { // Palettes
-		self.tempSortingBuffer = append(self.tempSortingBuffer, i)
-		data = append(data, self.palettes[i].colors...)
-	}
-
-	// (sort palette indices based on palette names)
-	slices.SortFunc(self.tempSortingBuffer, func(a, b uint64) int {
-		nameA := self.palettes[self.tempSortingBuffer[a]].name
-		nameB := self.palettes[self.tempSortingBuffer[b]].name
-		if nameA < nameB { return -1 }
-		if nameA > nameB { return  1 }
-		return 0
-	})
-	
-	font.offsetToColoringPaletteNames = uint32(len(data))
-	offset16 = 0
-	for _, index := range self.tempSortingBuffer { // PaletteNameEndOffsets
-		if len(self.palettes[index].name) > 32 { panic(invalidInternalState) }
-		offset16 += uint16(len(self.palettes[index].name))
-		data = appendUint16LE(data, offset16)
-	}
-	for _, index := range self.tempSortingBuffer { // PaletteNames
-		data = append(data, self.palettes[index].name...)
-	}
-
-	// coloring section
-	font.offsetToColoringSections	= uint32(len(data))
-	if len(self.coloringSectionStarts) > 255 { panic(invalidInternalState) }
-	if len(self.coloringSectionStarts) == 0 { panic(invalidInternalState) }
-	data = append(data, uint8(len(self.coloringSectionStarts))) // NumSections
-	var prevSectionStart uint8
-	for i := 0; i < len(self.coloringSectionStarts); i++ { // SectionStarts
-		if self.coloringSectionStarts[i] <= prevSectionStart && i > 0 {
-			panic(invalidInternalState) // "coloring sections not in order"
+	for i, _ := range self.colorSections { // // ColorSectionEndOffsets
+		if len(self.colorSections[i]) > 255 { panic(invalidInternalState) }
+		colorSectionNumColors := uint16(len(self.colorSections[i]))
+		switch self.colorSectionModes[i] {
+		case 0: // alpha
+			offset16 += colorSectionNumColors
+		case 1: // palette
+			offset16 += (colorSectionNumColors << 2)
+		default:
+			panic(invalidInternalState)
 		}
-		data = append(data, self.coloringSectionStarts[i])
-		prevSectionStart = self.coloringSectionStarts[i]
+		data = appendUint16LE(data, offset16)
 	}
-	if self.coloringSectionsEnd < prevSectionStart {
-		panic(invalidInternalState) // "coloring sections not in order"
-	}
-	data = append(data, self.coloringSectionsEnd) // SectionsEnd
 
-	if len(self.coloringSectionNames) != len(self.coloringSectionStarts) {
-		panic(invalidInternalState)
+	for i, _ := range self.colorSections { // // ColorSections
+		switch self.colorSectionModes[i] {
+		case 0: // alpha
+			for j, _ := range self.colorSections[i] {
+				data = append(data, self.colorSections[i][j].(color.Alpha).A)
+			}
+		case 1: // palette
+			for j, _ := range self.colorSections[i] {
+				rgba := self.colorSections[i][j].(color.RGBA)
+				data = append(data, rgba.R, rgba.G, rgba.B, rgba.A)
+			}
+		default:
+			panic(invalidInternalState)
+		}
 	}
+
+	font.offsetToColorSectionNames = uint32(len(data))
 	offset16 = 0
-	for i := 0; i < len(self.coloringSectionNames); i++ { // SectionNameEndOffsets
-		if len(self.coloringSectionNames[i]) > 32 { panic(invalidInternalState) }
-		offset16 += uint16(len(self.coloringSectionNames[i]))
+	for i, _ := range self.colorSectionNames { // ColorSectionNameEndOffsets
+		nameLen := len(self.colorSectionNames[i])
+		if nameLen == 0 || nameLen > 32 { panic(invalidInternalState) }
+		// notice: we aren't validating, hopefully no one messed with anything
+		offset16 += uint16(nameLen)
 		data = appendUint16LE(data, offset16)
 	}
-	for i := 0; i < len(self.coloringSectionNames); i++ { // SectionNames
-		data = append(data, self.coloringSectionNames[i]...)
-	}
-	
-	// section options
-	font.offsetToColoringSectionOptions = uint32(len(data))
-	offset16 = 0
-	for i := 0; i < len(self.coloringSectionOptions); i++ { // SectionOptionEndOffsets
-		if len(self.coloringSectionOptions[i]) > 16 { panic(invalidInternalState) }
-		offset16 += uint16(len(self.coloringSectionOptions[i]))
-		data = appendUint16LE(data, offset16)
-	}
-	for i := 0; i < len(self.coloringSectionOptions); i++ { // SectionOptions
-		data = append(data, self.coloringSectionOptions[i]...)
+
+	for i, _ := range self.colorSectionNames { // ColorSectionNameEndOffsets
+		data = append(data, self.colorSectionNames[i]...)
 	}
 	
 	// --- variables ---
@@ -420,8 +371,14 @@ func (self *FontBuilder) Build() (*Font, error) {
 			endOffset += uint16(nameLen)
 			data = appendUint16LE(data, endOffset)
 		}
+		var prevName string
 		for _, index := range self.tempSortingBuffer { // VariableNames
-			data = append(data, self.variables[index].Name...)
+			name := self.variables[index].Name
+			if name == prevName {
+				return nil, errors.New("duplicated variable name '" + name + "'")
+			}
+			data = append(data, name...)
+			prevName = name
 		}
 	}
 	
@@ -490,6 +447,7 @@ func (self *FontBuilder) Build() (*Font, error) {
 		}
 	}
 
+	data = appendUint16LE(data, uint16(offset)) // CodePointModeIndices slice size
 	for _, codePoint := range self.tempSortingBuffer { // CodePointModeIndices
 		mapping := self.runeMapping[int32(uint32(codePoint))]
 		if mapping.Mode == 255 { continue }
@@ -523,10 +481,8 @@ func (self *FontBuilder) Build() (*Font, error) {
 	}
 	for _, pair64 := range self.tempSortingBuffer { // HorzKerningValues
 		// TODO: this looks soooo expensive (same for vert kerning values)
-		glyphUID1, found := self.glyphEditIDs[uint16(pair64 >> 16)]
-		if !found { panic(invalidInternalState) }
-		glyphUID2, found := self.glyphEditIDs[uint16(pair64)]
-		if !found { panic(invalidInternalState) }
+		glyphUID1 := self.glyphOrder[uint16(pair64 >> 16)]
+		glyphUID2 := self.glyphOrder[uint16(pair64)]
 		kerningInfo, found := self.horzKerningPairs[[2]uint64{glyphUID1, glyphUID2}]
 		if !found { panic(invalidInternalState) }
 		if kerningInfo.Class == 0 {
@@ -555,10 +511,8 @@ func (self *FontBuilder) Build() (*Font, error) {
 		data = appendUint32LE(data, pair)
 	}
 	for _, pair64 := range self.tempSortingBuffer { // VertKerningValues
-		glyphUID1, found := self.glyphEditIDs[uint16(pair64 >> 16)]
-		if !found { panic(invalidInternalState) }
-		glyphUID2, found := self.glyphEditIDs[uint16(pair64)]
-		if !found { panic(invalidInternalState) }
+		glyphUID1 := self.glyphOrder[uint16(pair64 >> 16)]
+		glyphUID2 := self.glyphOrder[uint16(pair64)]
 		kerningInfo, found := self.horzKerningPairs[[2]uint64{glyphUID1, glyphUID2}]
 		if !found { panic(invalidInternalState) }
 		if kerningInfo.Class == 0 {
@@ -578,8 +532,11 @@ func (self *FontBuilder) Build() (*Font, error) {
 
 // Exports the current data into a .ggfnt file or data blob.
 func (self *FontBuilder) Export(writer io.Writer) error {
-	// TODO: using Build() and just export? lazy dev?
-	panic("unimplemented")
+	// TODO: unclear if we can make this substantially more 
+	//       efficient and if that would even be worth it.
+	font, err := self.Build()
+	if err != nil { return err }
+	return font.Export(writer)
 }
 
 // Exports the current edition data into a .ggwkfnt file or data blob.
@@ -661,11 +618,8 @@ func (self *FontBuilder) ParseEditionData(reader io.Reader) error {
 			return parser.NewError("kerning pair class can't be zero")
 		}
 		
-		first, found := self.glyphEditIDs[firstIndex]
-		if !found { return parser.NewError("kerning pair glyph not found") }
-		second, found := self.glyphEditIDs[secondIndex]
-		if !found { return parser.NewError("kerning pair glyph not found") }
-
+		first  := self.glyphOrder[firstIndex]
+		second := self.glyphOrder[secondIndex]
 		kerningPair, found := self.horzKerningPairs[[2]uint64{first, second}]
 		if found {
 			kerningPair.Class = kerningClass
@@ -687,11 +641,8 @@ func (self *FontBuilder) ParseEditionData(reader io.Reader) error {
 			return parser.NewError("kerning pair class can't be zero")
 		}
 		
-		first, found := self.glyphEditIDs[firstIndex]
-		if !found { return parser.NewError("kerning pair glyph not found") }
-		second, found := self.glyphEditIDs[secondIndex]
-		if !found { return parser.NewError("kerning pair glyph not found") }
-
+		first  := self.glyphOrder[firstIndex]
+		second := self.glyphOrder[secondIndex]
 		kerningPair, found := self.vertKerningPairs[[2]uint64{first, second}]
 		if found {
 			kerningPair.Class = kerningClass

@@ -14,7 +14,6 @@ The binary format is designed to be reasonably compact, have safe limits and kee
 
 ## Main limitations
 
-- Glyph max size is 256x256. This could theoretically get problematic with ligatures in complex scripts, but this is not a primary concern at the moment.
 - Max font file size is 32MiB.
 - Max number of glyphs is 56789. Some space is reserved for additional "control glyph indices".
 - Glyph composition is not supported (creating a single glyph from the combination of other glyphs).
@@ -25,13 +24,14 @@ The binary format is designed to be reasonably compact, have safe limits and kee
 Data in the spec can be described using the following types:
 - `uint8`, `uint16`, `uint32`, `uint64`: little-endian encoded, taking 1, 2, 4 and 8 bytes respectively.
 - `int8`, `int16`, `int32`, `int64`: little-endian encoded, taking 1, 2, 4 and 8 bytes respectively.
+- `nzuint8`, `nzint8`: non-zero `uint8` and `int8`. For `nzuint8`, we take the `uint8` value + 1. For `nzint8`, negative values are the same as `int8` and non-negative values are +1.
 - `bool`: single byte, must be 0 (false) or 1 (true).
 - `short string`: an `uint8` indicating string length in bytes, followed by the string data in utf8.
 - `string`: an `uint16` indicating string length in bytes, followed by the string data in utf8.
 - `short slice`: an `uint8` indicating the number of elements in the slice, followed by the list contents.
 - `slice`: an `uint16` indicating the number of elements in the slice, followed by the list contents.
 - `array`: a slice with an implicit length given by some other value already present in the font data. In other words: a slice without the initial size indication.
-- `date`: a triplet of (uint16, uint8, uint8) (year, month, day).
+- `date`: a triplet of (uint16, uint8, uint8) (year, month, day). Zero can be used as undefined, but year can only be zero if month and day are also zero, and month can only be zero if day is also zero. In other words: providing a day without a month or a month without a year is invalid.
 - `blob`: a data blob of variably-sized elements, indexed by a separate slice.
 
 Misc.:
@@ -75,9 +75,8 @@ For major and minor versions, any incompatible change (removing glyphs or tags, 
 
 ```Golang
 NumGlyphs uint16 // max is 56789, then 3211 reserved for control codes, then 5530 for custom glyphs
-HasVertLayout bool // if true, additional data must be provided for vertical drawing metrics
+HasVertLayout bool // 0 for no vert layout, 1 for yes // TODO: maybe 2 for yes with mono height?
 MonoWidth uint8 // set to 0 if the font is not monospaced
-MonoHeight uint8 // only relevant if VertLayout is true. like MonoWidth but for height.
 
 Ascent uint8 // font ascent without accounting for diacritics. can't be zero.
 ExtraAscent uint8 // extra ascent for diacritics, if any required. must be < Ascent
@@ -87,6 +86,8 @@ LowercaseAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
 HorzInterspacing uint8 // default horz spacing between glyphs. typically one or zero
 VertInterspacing uint8 // if no VertLayout, just leave to 0
 LineGap uint8 // suggested line gap for the font
+VertLineWidth uint8 // must be zero if no VertLayout is used
+VertLineGap uint8 // must be zero if no VertLayout is used
 ```
 
 NumGlyphs includes only the number of glyphs with actual graphical data (no control glyph indices).
@@ -126,73 +127,55 @@ GlyphNameEndOffsets [NumNamedGlyphs]uint32 // indexes GlyphNames in order
 GlyphNames blob[noLenString] // in lexicographical order. names can't repeat
 
 GlyphMaskEndOffsets [NumGlyphs]uint32 // indexes GlyphMasks
-GlyphMasks blob[Bounds, [...]RasterOperation] // (move to, line to, etc.)
+GlyphMasks blob[Placement, [...]RasterOperation] // (move to, line to, etc.)
 ```
 
 Minor technical note: while using uint16 instead of uint32 for NameGlyphOffsets would almost always be reasonable, I want to avoid tricky implicit restrictions, and names themselves also tend to have much higher overhead than those extra 2 bytes per entry.
 
 Glyph names must match basic-name-regexp.
 
-The glyph bounds are:
+The glyph placement is:
 ```Golang
-maskWidth, maskHeight uint8
-leftOffset, rightOffset int8 // I prefer "offsets" to "side bearings" terminology in this context
-topOffset, bottomOffset int8 // omitted if VertLayout is false.
-vertHorzOffset int8 // omitted if VertLayout is false. leftOffset is *NOT APPLIED* on vert draws
+advance uint8
+topAdvance uint8 // omitted if VertLayout is false
+bottomAdvance uint8 // omitted if VertLayout is false
+horzCenter uint8 // omitted if VertLayout is false
 ```
 
-Glyph data is easy to look up thanks to the `GlyphMaskOffsets` index. Data is encoded using raster commands, which are sequences of "control codes" and data:
+Data is encoded using raster operations, which are sequences of "control codes" and data:
 - Control codes are based on bit flags:
-	- 0b0000_0001 : change color key. Defaults to 255. Changes persist through multiple commands (only reset on new glyph mask definition). Will have uint8 value in the data.
-	- 0b0000_0010 : pre move horz, will have int8 value in the data.
-	- 0b0000_0100 : pre move vert, will have int8 value in the data.
-	- 0b0000_1000 : draw horz, will have int8 value in the data.
-	- 0b0001_0000 : draw vert, will have int8 value in the data.
-	- (note: if draw horz + vert are combined, we draw a rect)
-	- 0b0010_0000 : post horz move (can be used even if not drawing), will have int8 in the data.
-	- 0b0100_0000 : post vert move (can be used even if not drawing), will have int8 in the data.
-	- 0b1000_0000 : reset color key to previous value before the command.
-- Data sequences are determined by the control codes.
-- The sequences end based on the `short[]RasterOperation` length.
+	- 0b0000_0001 : change palette index. Defaults to 255. Changes persist through multiple commands (only reset on new glyph mask definition). Will have uint8 value in the data (which can't be zero).
+	- 0b0000_0010 : pre horizontal move, will have nzint8 value in the data.
+	- 0b0000_0100 : pre vertical move, will have nzint8 value in the data.
+	- 0b0000_1000 : single row pre vertical advance (pre vertical move flag must be unset).
+	- 0b0001_0000 : flag for diagonal mode. If set, some of the next flags are interpreted differently.
+	- 0b0010_0000 : draw horizontally; on diagonal mode, diagonal length. Will have `nzuint8` value in the data.
+	- 0b0100_0000 : draw vertically (will have `nzuint8` value in the data); on diagonal mode, flag for ascending (set) or descending (unset) diagonal.
+	- 0b1000_0000 : single pixel draw flag (both draw horz and draw vert flags must be unset).
 
-There are many ways to encode any single mask. This might not be a trivial problem to solve optimally, but that's not particularly important. Any decent algorithm will do (e.g. find big rectangular areas, split them, sort by proximity, encode them one by one (for hard edge cases take the simplest path, they are not common)).
+Important:
+- The horizontal draw width is always advanced automatically during operations. The vertical draw height is not applied.
+- Overflows in movements or draw sizes might cause an error or panic (this could be configurable at the renderer level).
+- The initial position (0, 0) corresponds to the first left pixel below the baseline. To go right, we use positive horizontal values. To up, we use negative vertical values (though in general operations are given from top-left to bottom right, so negative vertical advances are not naturally found except on the initial movement).
 
-Named glyphs are useful to look up "unique" glyphs from within the code, like, "half heart icon" or others that may be relevant in your game but you can't or don't want connected to standard unicode code points. These would be mapped to a unicode private area like (U+E000, U+F8FF). Recommended standard named glyphs:
+There are many ways to encode any single mask. This might not be a trivial problem to solve optimally, but that's not particularly important at the moment, and many simple solutions are enough.
+
+Named glyphs are useful to look up "unique" glyphs from within the code, like, "ico-heart-half" or others that may be relevant in your game but you can't or don't want connected to standard unicode code points. These would be mapped to a unicode private area like (U+E000, U+F8FF). Recommended standard named glyphs:
 - `notdef`: rectangle representing missing glyph.
 Names must conform to `basic-name-regexp`. Names aren't meant to support naming *all* glyphs in the font, only glyphs that have to be referenceable in particular due to *specific game needs* or general operation (e.g. notdef).
 
-### Coloring
+### Color
 
-Actual coloring table:
+Actual color table:
 ```Golang
-NumDyes uint8 // should virtually always be at least 1. max is 254, as 255 can't be referenced
-DyeNameEndOffsets [NumDyes]uint16
-DyeNames blob[noLenString] // first dye should be named "main". must match basic-name-regexp
-
-// predefined palettes
-NumPalettes uint8 // can't be zero
-PaletteDyes [NumPalettes]uint8 // use zero for no dye
-PaletteEndOffsets [NumPalettes]uint16
-Palettes blob[[...](uint8, uint8, uint8, uint8)]
-PaletteNameEndOffsets [NumPalettes]uint16
-PaletteNames blob[noLenString] // must match basic-name-regexp or ""
-
-// definable sections
-NumSections uint8 // can't be zero
-SectionStarts [NumSections]uint8 // inclusive
-SectionsEnd uint8 // inclusive
-SectionNameEndOffsets [NumSections]uint16
-SectionNames blob[noLenString] // must match basic-name-regexp or ""
-
-SectionOptionEndOffsets [NumSections]uint16
-SectionOptions blob[[...]uint8] // first palette index is the default
+NumColorSections uint8 // must be at least 1
+ColorSectionModes [NumColorSections]uint8 // if 1, palette, if 0, alpha scale
+ColorSectionStarts [NumColorSections]uint8 // inclusive, can't be zero, in descending order
+ColorSectionEndOffsets [NumColorSection]uint16 // section length must be checked at parsing time
+ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
+ColorSectionNameEndOffsets [NumColorSections]uint16
+ColorSectionNames blob[ColorSectionDefinition]
 ```
-
-Both palette names and section names can be empty to be considered "private", but in that case, private palettes must be used (and can only be used) on some private section as the default value, and private sections must only include one palette.
-
-If cardinality of palette doesn't match the color section, return a parsing error. We might be more lenient in the future, but let's worry about that later.
-
-For sections, parsers must enforce a limit of max 16 palette choices per section.
 
 Note for renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
 
@@ -211,6 +194,13 @@ VariableNames blob[noLenString] // in lexicographical order
 Variable names must conform to `basic-name-regexp`. The max number of variables is 255.
 
 Variables are used for conditional or variable `code point -> rune` mappings and for custom FSMs. This is all explored throughout the next sections.
+
+We also have some special variables that renderers might detect and adjust automatically if they are named:
+- "vert-mode-on": set to 1 when rendering in vertical mode, 0 otherwise.
+- TODO: decide if this is really a good idea. It's helpful for vert mode, but if that's the only thing, it might be better to do it manually or something. leading or first glyph could be a thing too. maybe a special variable to allow metrical transgressions, though that seems like a terrible way to go about it.
+
+There are also other variables that have semi-standardized names but are not automatically adjusted:
+- "glyph-rotation": if 0, glyph rotation is determined by "vert-mode-on". If 1, glyphs are always rotated. If 2, glyphs are never rotated.
 
 ### Mapping
 
@@ -359,4 +349,3 @@ VertKerningPairs [NumVertKerningPairsWithClasses](first, second uint16, class ui
 
 MappingModeNames short[]shortString // must conform to basic-name-regex (+ possible spaces)
 ```
-

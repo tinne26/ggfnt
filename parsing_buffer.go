@@ -26,7 +26,7 @@ func (self *parsingBuffer) NewError(details string) error {
 
 func (self *parsingBuffer) InitBuffers() {
 	self.tempBuff = make([]byte, 1024)
-	self.bytes    = make([]byte, 1024)
+	self.bytes    = make([]byte, 0, 1024)
 	self.index = 0
 	self.eof = false
 }
@@ -59,7 +59,7 @@ func (self *parsingBuffer) readMore() error {
 			if len(self.bytes) > MaxFontDataSize {
 				return self.NewError("font data size exceeds limit")
 			}
-			k := copy(self.bytes[: len(self.bytes) - n], self.tempBuff[ : n])
+			k := copy(self.bytes[len(self.bytes) - n : ], self.tempBuff[ : n])
 			if k != n { panic("broken code") }
 		}
 
@@ -93,7 +93,8 @@ func (self *parsingBuffer) readUpTo(newIndex int) error {
 }
 
 func (self *parsingBuffer) AdvanceBytes(n int) error {
-	if n <= 0 { panic("AdvanceBytes(N) where N <= 0") }
+	if n == 0 { return nil }
+	if n < 0 { panic("AdvanceBytes(N) where N < 0") }
 	return self.readUpTo(self.index + n)
 }
 
@@ -155,6 +156,7 @@ func (self *parsingBuffer) ReadBool() (bool, error) {
 func (self *parsingBuffer) ReadShortStr() (string, error) {
 	length, err := self.ReadUint8()
 	if err != nil { return "", err }
+	if length == 0 { return "", nil }
 	index := self.index
 	err = self.readUpTo(index + int(length))
 	if err != nil { return "", err }
@@ -164,6 +166,7 @@ func (self *parsingBuffer) ReadShortStr() (string, error) {
 func (self *parsingBuffer) ReadString() (string, error) {
 	length, err := self.ReadUint16()
 	if err != nil { return "", err }
+	if length == 0 { return "", nil }
 	index := self.index
 	err = self.readUpTo(index + int(length))
 	if err != nil { return "", err }
@@ -171,9 +174,15 @@ func (self *parsingBuffer) ReadString() (string, error) {
 }
 
 func (self *parsingBuffer) ValidateBasicName(name string) error {
-	if len(name) > 32 { return self.NewError("basic name can't exceed 32 characters") }
-	if len(name) == 0 { return self.NewError("basic name can't be empty") }
-	if name[0] == '-' { return self.NewError("basic name can't start with a hyphen") }
+	err := validateBasicName(name)
+	if err == nil { return nil }
+	return self.NewError(err.Error())
+}
+
+func validateBasicName(name string) error {
+	if len(name) > 32 { return errors.New("basic name can't exceed 32 characters") }
+	if len(name) == 0 { return errors.New("basic name can't be empty") }
+	if name[0] == '-' { return errors.New("basic name can't start with a hyphen") }
 
 	var prevIsHyphen bool
 	for i := 0; i < len(name); i++ {
@@ -183,16 +192,16 @@ func (self *parsingBuffer) ValidateBasicName(name string) error {
 		}
 		if name[i] == '-' {
 			if prevIsHyphen {
-				self.NewError("basic name can't contain consecutive hyphens")
+				errors.New("basic name can't contain consecutive hyphens")
 			}
 			prevIsHyphen = true
 			continue
 		}
-		return self.NewError("basic name contains invalid character")
+		return errors.New("basic name contains invalid character")
 	}
 	
 	if prevIsHyphen {
-		return self.NewError("basic name can't end with a hyphen")
+		return errors.New("basic name can't end with a hyphen")
 	}
 
 	return nil
@@ -200,12 +209,18 @@ func (self *parsingBuffer) ValidateBasicName(name string) error {
 
 // Repeated spaces and hyphens and stuff are ok on basic names.
 func (self *parsingBuffer) ValidateBasicSpacedName(name string) error {
-	if len(name) > 32 { return self.NewError("name can't exceed 32 characters") }
-	if len(name) == 0 { return self.NewError("name can't be empty") }
+	err := validateBasicSpacedName(name)
+	if err == nil { return nil }
+	return self.NewError(err.Error())
+}
+
+func validateBasicSpacedName(name string) error {
+	if len(name) > 32 { return errors.New("name can't exceed 32 characters") }
+	if len(name) == 0 { return errors.New("name can't be empty") }
 
 	for i := 0; i < len(name); i++ {
 		if isAZaz09(name[i]) || name[i] == '-' || name[i] == ' ' { continue }
-		return self.NewError("name contains invalid character")
+		return errors.New("name contains invalid character")
 	}
 	
 	return nil
@@ -214,5 +229,3 @@ func (self *parsingBuffer) ValidateBasicSpacedName(name string) error {
 func isAZaz09(char byte) bool {
 	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')
 }
-
-// TODO: slice reads/skips, signed integer types, date parsing, basic-name-regexp checks, etc.

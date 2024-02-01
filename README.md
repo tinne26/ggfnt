@@ -18,7 +18,7 @@ Summary of features and technical properties:
 - Single file spec under 400 lines (not easy, but easily accessible).
 - Many hard limits to make life safer.
 - Support for vertical text.
-- Support for colored glyphs with 256 color palettes.
+- Support for colored glyphs with 255 color palettes.
 - Support for variables and conditional character mapping.
 - Support for kerning and kerning classes during edition.
 - Font data layout is directly usable once ungzipped (not many additional structures required, straightforward implementation).
