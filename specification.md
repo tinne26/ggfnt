@@ -35,7 +35,7 @@ Data in the spec can be described using the following types:
 - `blob`: a data blob of variably-sized elements, indexed by a separate slice.
 
 Misc.:
-- basic-name-regexp: `[a-zA-Z](-?[A-Za-z0-9]+)*`, used in a couple places. The natural description of the regxp is the following: name uses only ascii, starts with a letter, and might use hyphens as separators. There's also an additional size limit of max 32 characters.
+- basic-name-regexp: `[a-zA-Z](-?[A-Za-z0-9]+)*`, used in a couple places. The natural description of the regexp is the following: name uses only ascii, starts with a letter, and might use hyphens as separators. There's also an additional size limit of max 32 characters.
 
 ## Data sections
 

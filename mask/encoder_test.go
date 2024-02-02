@@ -120,4 +120,95 @@ func TestEncoder(t *testing.T) {
 	if !slices.Equal(data, expected) {
 		t.Fatalf("expected mask encoder to return %s, got %s", fmtBinarySlice(expected), fmtBinarySlice(data))
 	}
+
+	// test #5 (A)
+	// -6  0 0 0
+	// -5  1 1 1
+	// -4  1 0 1
+	// -3  1 1 1
+	// -2  1 0 1
+	// -1  1 0 1
+	//  0  0 0 0
+	mask = image.NewAlpha(image.Rect(0, -6, 3, 1))
+	mask.SetAlpha(0, -5, color.Alpha{255})
+	mask.SetAlpha(1, -5, color.Alpha{255})
+	mask.SetAlpha(2, -5, color.Alpha{255})
+
+	mask.SetAlpha(0, -4, color.Alpha{255})
+	mask.SetAlpha(2, -4, color.Alpha{255})
+
+	mask.SetAlpha(0, -3, color.Alpha{255})
+	mask.SetAlpha(1, -3, color.Alpha{255})
+	mask.SetAlpha(2, -3, color.Alpha{255})
+
+	mask.SetAlpha(0, -2, color.Alpha{255})
+	mask.SetAlpha(2, -2, color.Alpha{255})
+
+	mask.SetAlpha(0, -1, color.Alpha{255})
+	mask.SetAlpha(2, -1, color.Alpha{255})
+
+	data = encoder.AppendRasterOps(nil, mask)
+	expected = []byte{
+		0b0100_0100, // move to top and vertical line
+		0b1111_1011, // payload: pre move vert - 5
+		0b0000_0100, // payload: vert draw len = 5
+
+		0b1000_0000, // single pixel
+
+		0b0100_0000, // vert line
+		0b0000_0100, // payload: vert draw len + 5
+
+		0b1000_0110, // move horz - 2, move vert + 2, single pix
+		0b1111_1110, // payload: pre move horz - 2
+		0b0000_0001, // payload: pre move vert + 2
+	}
+	if !slices.Equal(data, expected) {
+		t.Fatalf("expected mask encoder to return %s, got %s", fmtBinarySlice(expected), fmtBinarySlice(data))
+	}
+
+	// test #6 (B)
+	// -6  0 0 0
+	// -5  1 1 0
+	// -4  1 0 1
+	// -3  1 1 0
+	// -2  1 0 1
+	// -1  1 1 0
+	//  0  0 0 0
+	mask = image.NewAlpha(image.Rect(0, -6, 3, 1))
+	mask.SetAlpha(0, -5, color.Alpha{255})
+	mask.SetAlpha(1, -5, color.Alpha{255})
+
+	mask.SetAlpha(0, -4, color.Alpha{255})
+	mask.SetAlpha(2, -4, color.Alpha{255})
+
+	mask.SetAlpha(0, -3, color.Alpha{255})
+	mask.SetAlpha(1, -3, color.Alpha{255})
+
+	mask.SetAlpha(0, -2, color.Alpha{255})
+	mask.SetAlpha(2, -2, color.Alpha{255})
+
+	mask.SetAlpha(0, -1, color.Alpha{255})
+	mask.SetAlpha(1, -1, color.Alpha{255})
+
+	data = encoder.AppendRasterOps(nil, mask)
+	expected = []byte{
+		0b0010_0100, // move vert -5, draw horz line +2
+		0b1111_1011, // payload: pre move vert -5
+		0b0000_0001, // payload: draw horz +2
+
+		0b0100_1010, // move horz -2, advance line, draw vert +4
+		0b1111_1110, // payload: pre move horz -2
+		0b0000_0011, // payload: draw vert +4
+
+		0b0111_0000, // diagonal asc
+		0b0000_0001, // payload: diagonal len +2
+
+		0b0111_0110, // move horz -2, move vert +2, draw diag asc
+		0b1111_1110, // payload: pre move horz -2
+		0b0000_0001, // payload: pre move vert +2
+		0b0000_0001, // payload: diagonal len + 2
+	}
+	if !slices.Equal(data, expected) {
+		t.Fatalf("expected mask encoder to return %s, got %s", fmtBinarySlice(expected), fmtBinarySlice(data))
+	}
 }

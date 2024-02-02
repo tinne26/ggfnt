@@ -126,8 +126,8 @@ func (self *Encoder) computeMaskFragments(mask *image.Alpha) {
 
 	// find isolated pixels and diagonals (only down-left/down-right)
 	var index int
-	var x, y int = 0, maskCopy.Rect.Min.Y
-	var minX, minY, maxX, maxY int = 9999, 9999, 0, 0
+	var x, y int = maskCopy.Rect.Min.X, maskCopy.Rect.Min.Y
+	var minX, minY, maxX, maxY int = maskCopy.Rect.Max.X, maskCopy.Rect.Max.Y, x, y
 	for index < len(maskCopy.Pix) {
 		for x := maskCopy.Rect.Min.X; x < maskCopy.Rect.Max.X; x++ {
 			value := maskCopy.Pix[index]
@@ -148,11 +148,13 @@ func (self *Encoder) computeMaskFragments(mask *image.Alpha) {
 					line := findLine(maskCopy, x, y, index, value)
 					line.ClearFrom(maskCopy)
 					self.fragments = append(self.fragments, line)
-				case 2, 3: // register for later
-					if y  < minY { minX, minY = x, y } // since we go LTR, x is already min if y == minY
-					if y >= maxY { maxX, maxY = x, y } // since we go LTR, current x is max if y == maxY
+				case 2, 3, 4: // register for later
+					if x > maxX { maxX = x }
+					if x < minX { minX = x }
+					if y < minY { minY = y }
+					if y > maxY { maxY = y }
 				default:
-					panic("unexpected case") // 4 can't happen if we are cleaning up properly
+					panic("broken code") // more than 4 is not possible
 				}
 			}
 			index += 1
@@ -160,12 +162,17 @@ func (self *Encoder) computeMaskFragments(mask *image.Alpha) {
 		y += 1
 	}
 
+	// handle case for no isolated pixels found (e.g. perfectly rectangular "O")
+	if image.Rect(minX, minY, maxX, maxY).Empty() {
+		minX, minY, maxX, maxY = maskCopy.Rect.Min.X, maskCopy.Rect.Min.Y, maskCopy.Rect.Max.X - 1, maskCopy.Rect.Max.Y - 1
+	}
+
 	// find remaining rects
-	index = (minY - maskCopy.Rect.Min.Y)*maskCopy.Stride + (minX - maskCopy.Rect.Min.X)
-	endIndex := (maxY - maskCopy.Rect.Min.Y)*maskCopy.Stride + (maxX - maskCopy.Rect.Min.X)
-	x, y = minX, minY
-	for index < endIndex {
-		for x < maskCopy.Rect.Max.X {
+	y = minY
+	for y <= maxY {
+		x = minX
+		index := getPixelIndex(maskCopy, x, y)
+		for x <= maxX {
 			value := maskCopy.Pix[index]
 			if value != 0 {
 				if countNeighbours(maskCopy, x, y, index, value) == 0 {
@@ -181,5 +188,6 @@ func (self *Encoder) computeMaskFragments(mask *image.Alpha) {
 			x += 1
 			index += 1
 		}
+		y += 1
 	}
 }

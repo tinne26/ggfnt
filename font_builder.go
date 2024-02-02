@@ -1,11 +1,14 @@
 package ggfnt
 
+import "fmt"
 import "io"
 import "slices"
 import "errors"
 import "image/color"
 
 import "github.com/tinne26/ggfnt/mask"
+
+const debugBuildGlyphEncoding = false
 
 const invalidInternalState = "invalid internal state"
 const fontBuilderDefaultFontName = "Unnamed"
@@ -45,8 +48,6 @@ type FontBuilder struct {
 	// metrics
 	hasVertLayout bool
 	monoWidth uint8
-	monoHeightMin int8
-	monoHeightMax int8
 	ascent uint8
 	extraAscent uint8
 	descent uint8
@@ -274,6 +275,7 @@ func (self *FontBuilder) Build() (*Font, error) {
 		}
 
 		// append mask data (expensive to process the masks!)
+		if debugBuildGlyphEncoding { fmt.Printf("encoding glyph %d\n", i) }
 		data = self.tempMaskEncoder.AppendRasterOps(data, glyph.Mask)
 
 		// write offset back on the relevant index

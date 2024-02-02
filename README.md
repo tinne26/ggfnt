@@ -12,13 +12,13 @@ TODO: add some examples from ptxt-examples.
 
 # Specification
 
-See the [specification document](github.com/tinne26/ggfnt/tree/main/specification.md).
+See the [specification document](https://github.com/tinne26/ggfnt/blob/main/specification.md).
 
 Summary of features and technical properties:
 - Single file spec under 400 lines (not easy, but easily accessible).
 - Many hard limits to make life safer.
 - Support for vertical text.
-- Support for colored glyphs with 255 color palettes.
+- Support for colored glyphs with up to 255 colors.
 - Support for variables and conditional character mapping.
 - Support for kerning and kerning classes during edition.
 - Font data layout is directly usable once ungzipped (not many additional structures required, straightforward implementation).

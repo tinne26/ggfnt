@@ -2,7 +2,7 @@ package mask
 
 import "image"
 
-const applySafetyChecks = false
+const applySafetyChecks = true
 const safetyCheckViolation = "safety check violation"
 const unexpected = "unexpected"
 
@@ -42,10 +42,23 @@ func findLine(img *image.Alpha, x, y int, index int, value uint8) rasterFragment
 		if countNeighbours(img, x, y, index, value) != 1 { panic(safetyCheckViolation) }
 	}
 
-	// line can't go left or it would violate preconds
-	if x > img.Rect.Min.X && img.Pix[index - 1] == value { panic(unexpected) } // line going left
-
 	rect := rasterFragment{ minX: x, minY: y, maxX: x, maxY: y, value: value }
+
+	// line going left (can happen with a C shape for example)
+	if x > img.Rect.Min.X && img.Pix[index - 1] == value {
+		if y > img.Rect.Min.Y && img.Pix[index - img.Stride] == value { panic(unexpected) } // line also going up?
+		if y + 1 < img.Rect.Max.Y && img.Pix[index + img.Stride] == value { panic(unexpected) } // line also going down?
+		if x + 1 < img.Rect.Max.X && img.Pix[index + 1] == value { panic(unexpected) } // line also going right?
+
+		rect.minX -= 1
+		index -= 2
+		for rect.minX > img.Rect.Min.X && img.Pix[index] == value {
+			rect.minX -= 1
+			index -= 1
+		}
+		return rect
+	}
+
 	if y > img.Rect.Min.Y && img.Pix[index - img.Stride] == value { // line going up
 		if y + 1 < img.Rect.Max.Y && img.Pix[index + img.Stride] == value { panic(unexpected) } // line also going down?
 		if x + 1 < img.Rect.Max.X && img.Pix[index + 1] == value { panic(unexpected) } // line also going right?
