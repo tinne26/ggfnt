@@ -1,4 +1,4 @@
-package ggfnt
+package builder
 
 import "testing"
 import "bytes"
@@ -6,9 +6,11 @@ import "slices"
 import "image"
 import "image/color"
 
+import "github.com/tinne26/ggfnt"
+
 func TestBasicFontBuild(t *testing.T) {
 	// see that empty font build results in ErrBuildNoGlyphs
-	builder := NewFontBuilder()
+	builder := New()
 	_, err := builder.Build()
 	if err != ErrBuildNoGlyphs {
 		if err == nil {
@@ -64,8 +66,8 @@ func TestBasicFontBuild(t *testing.T) {
 	}
 
 	// compare built font header data with previous values
-	if font.Header().FormatVersion() != FormatVersion {
-		t.Fatalf("expected font version %d, got %d instead", FormatVersion, font.Header().FormatVersion())
+	if font.Header().FormatVersion() != ggfnt.FormatVersion {
+		t.Fatalf("expected font version %d, got %d instead", ggfnt.FormatVersion, font.Header().FormatVersion())
 	}
 	if font.Header().ID() != builderFontID {
 		t.Fatalf("expected font ID %016X, got %016X instead", builderFontID, font.Header().ID())
@@ -117,45 +119,46 @@ func TestBasicFontBuild(t *testing.T) {
 		t.Fatalf("unexpected Font.Export() error: %s", err)
 	}
 
-	reFont, err := Parse(&buffer)
+	reFont, err := ggfnt.Parse(&buffer)
 	if err != nil {
 		t.Fatalf("unexpected Parse() error: %s", err)
 	}
-	if !slices.Equal(reFont.data, font.data) {
-		t.Fatalf("after exporting and re-parsing, font data changed:\n>> (original build) %v\n>> (export+parse) %v", font.data, reFont.data)
+	//reFont := internal.Font(*ggfont)
+	if !slices.Equal(reFont.Data, font.Data) {
+		t.Fatalf("after exporting and re-parsing, font data changed:\n>> (original build) %v\n>> (export+parse) %v", font.Data, reFont.Data)
 	}
 
 	// check offsets consistency
-	if reFont.offsetToMetrics != font.offsetToMetrics {
-		t.Fatalf("after exporting and re-parsing, offset to metrics is %d (expected %d)", reFont.offsetToMetrics, font.offsetToMetrics)
+	if reFont.OffsetToMetrics != font.OffsetToMetrics {
+		t.Fatalf("after exporting and re-parsing, offset to metrics is %d (expected %d)", reFont.OffsetToMetrics, font.OffsetToMetrics)
 	}
-	if reFont.offsetToGlyphNames != font.offsetToGlyphNames {
-		t.Fatalf("after exporting and re-parsing, offset to glyph names is %d (expected %d)", reFont.offsetToGlyphNames, font.offsetToGlyphNames)
+	if reFont.OffsetToGlyphNames != font.OffsetToGlyphNames {
+		t.Fatalf("after exporting and re-parsing, offset to glyph names is %d (expected %d)", reFont.OffsetToGlyphNames, font.OffsetToGlyphNames)
 	}
-	if reFont.offsetToGlyphMasks != font.offsetToGlyphMasks {
-		t.Fatalf("after exporting and re-parsing, offset to glyph masks is %d (expected %d)", reFont.offsetToGlyphMasks, font.offsetToGlyphMasks)
+	if reFont.OffsetToGlyphMasks != font.OffsetToGlyphMasks {
+		t.Fatalf("after exporting and re-parsing, offset to glyph masks is %d (expected %d)", reFont.OffsetToGlyphMasks, font.OffsetToGlyphMasks)
 	}
-	if reFont.offsetToColorSections != font.offsetToColorSections {
-		t.Fatalf("after exporting and re-parsing, offset to color sections is %d (expected %d)", reFont.offsetToColorSections, font.offsetToColorSections)
+	if reFont.OffsetToColorSections != font.OffsetToColorSections {
+		t.Fatalf("after exporting and re-parsing, offset to color sections is %d (expected %d)", reFont.OffsetToColorSections, font.OffsetToColorSections)
 	}
-	if reFont.offsetToColorSectionNames != font.offsetToColorSectionNames {
-		t.Fatalf("after exporting and re-parsing, offset to color section names is %d (expected %d)", reFont.offsetToColorSectionNames, font.offsetToColorSectionNames)
+	if reFont.OffsetToColorSectionNames != font.OffsetToColorSectionNames {
+		t.Fatalf("after exporting and re-parsing, offset to color section names is %d (expected %d)", reFont.OffsetToColorSectionNames, font.OffsetToColorSectionNames)
 	}
-	if reFont.offsetToVariables != font.offsetToVariables {
-		t.Fatalf("after exporting and re-parsing, offset to variables is %d (expected %d)", reFont.offsetToVariables, font.offsetToVariables)
+	if reFont.OffsetToVariables != font.OffsetToVariables {
+		t.Fatalf("after exporting and re-parsing, offset to variables is %d (expected %d)", reFont.OffsetToVariables, font.OffsetToVariables)
 	}
-	if reFont.offsetToMappingModes != font.offsetToMappingModes {
-		t.Fatalf("after exporting and re-parsing, offset to mapping modes is %d (expected %d)", reFont.offsetToMappingModes, font.offsetToMappingModes)
+	if reFont.OffsetToMappingModes != font.OffsetToMappingModes {
+		t.Fatalf("after exporting and re-parsing, offset to mapping modes is %d (expected %d)", reFont.OffsetToMappingModes, font.OffsetToMappingModes)
 	}
 	// TODO: offsetsToFastMapTables (iter)
-	if reFont.offsetToMainMappings != font.offsetToMainMappings {
-		t.Fatalf("after exporting and re-parsing, offset to main mappings is %d (expected %d)", reFont.offsetToMainMappings, font.offsetToMainMappings)
+	if reFont.OffsetToMainMappings != font.OffsetToMainMappings {
+		t.Fatalf("after exporting and re-parsing, offset to main mappings is %d (expected %d)", reFont.OffsetToMainMappings, font.OffsetToMainMappings)
 	}
-	if reFont.offsetToHorzKernings != font.offsetToHorzKernings {
-		t.Fatalf("after exporting and re-parsing, offset to horz kernings is %d (expected %d)", reFont.offsetToHorzKernings, font.offsetToHorzKernings)
+	if reFont.OffsetToHorzKernings != font.OffsetToHorzKernings {
+		t.Fatalf("after exporting and re-parsing, offset to horz kernings is %d (expected %d)", reFont.OffsetToHorzKernings, font.OffsetToHorzKernings)
 	}
-	if reFont.offsetToVertKernings != font.offsetToVertKernings {
-		t.Fatalf("after exporting and re-parsing, offset to vert kernings is %d (expected %d)", reFont.offsetToVertKernings, font.offsetToVertKernings)
+	if reFont.OffsetToVertKernings != font.OffsetToVertKernings {
+		t.Fatalf("after exporting and re-parsing, offset to vert kernings is %d (expected %d)", reFont.OffsetToVertKernings, font.OffsetToVertKernings)
 	}
 }
 

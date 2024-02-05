@@ -97,8 +97,10 @@ MonoWidth must be allowed to be 0 even if in practice all glyphs have the same w
 Regarding the glyph range, this font format has multiple areas for control glyph indices:
 - 56789 - 56899 (inclusive): predefined control codes that everyone must understand. The currently defined control indices are the following:
 	- 56789: missing glyph. Used when a unicode code point doesn't have a corresponding glyph in the font. Notice that this is not the same as the "notdef" glyph. It's recommended that a font has a "notdef" named glyph, but it's up to the programmer and renderer code to replace 56789 with notdef or panic or return an error or replace with something else.
-	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace mising glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning.
-	- 56791: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
+	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace mising glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning, and not running this through FSMs.
+	- 56791: the text start glyph. This can be useful on FSMs.
+	- 56792: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
+	- 56793: the tab glyph. Tab configuration should happen at the renderer level, typically replaced by the advance of four spaces.
 	- ... the rest are undefined
 - 56900 - 56999: reserved for font-specific control codes. E.g., for use in FSMs. Some of these control codes can be named (font-level customization).
 - 57000 - 57999: reserved for renderer-specific control codes (library-level customization).
@@ -297,11 +299,42 @@ FirstArgData  uint8
 SecondArgData uint8
 ```
 
+The default mapping table condition is (0b0000_1010, 0, 0), which means 0 == 0 (always true).
+
 Parsers must limit the *total* fast mapping tables memory usage to 32KiB. Table lengths must also be strictly limited to less or equal than 1000. Anything above a few hundred contiguous code points tends to be suspicious anyway.
 
 ### FSMs
 
-(Not designed yet; finite state machines to assist complex script shaping and creation of ligatures).
+Prototype design, not yet included in the format:
+
+```Golang
+NumFSMs uint8
+FSMEndOffsets [NumFSMs]uint32
+FSMs blob[...]
+```
+All FSMs will be executed for each new glyph in the text, in their definition order.
+
+For each FSM:
+```Golang
+NumStates uint8
+TransitionEndOffsets []uint16
+Transitions blob[...]
+```
+
+Transitions are defined by a stream of bytes:
+- First byte indicates the target state.
+- Next byte encodes the following information:
+	- 0bX000_0000: if set, we continue jumping when reaching the target.
+	- 0b0X00_0000: if set, next bytes correspond to glyph indices, otherwise it's variables.
+	- 0b00X0_0000: if set, after this transition there's a new one that also must be true to jump (it omits the first target byte; the "continue jumping" flag must match the previous transition value).
+	- 0b000X_XXXX: encodes the number of glyph index or variable commands coming up next. Zero means inconditional jump.
+- For glyph index transitions, we have the glyph indices sorted in ascending order, so we can binary search them.
+- For variables, we have three bytes:
+	- Operator: 00 is ==, 01 is !=, 10 is <, 11 is <=. If 0b0000_0X00 is set, the second argument will also be a variable instead of a constant. If 0b0000_X000 is set, we have an AND operation. Otherwise we have an OR.
+	- First argument: variable ID.
+	- Second argument: constant or variable ID, depending on the operator.
+
+The FSM max jumping sequence length is restricted to 32 in order to avoid infinite loops.
 
 ### Kernings
 

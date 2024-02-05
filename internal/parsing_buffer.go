@@ -1,4 +1,4 @@
-package ggfnt
+package internal
 
 import "io"
 import "errors"
@@ -10,39 +10,39 @@ import "compress/gzip"
 // parsing exceeds the cost of allocating <2KiB each time that
 // it's needed
 
-type parsingBuffer struct {
-	tempBuff []byte // size 1024, for temporary reads immediately copied to 'bytes'
+type ParsingBuffer struct {
+	TempBuff []byte // size 1024, for temporary reads immediately copied to 'bytes'
 	gzipReader *gzip.Reader
-	fileType string
+	FileType string
 
-	bytes []byte
-	index int // index of processed data within 'bytes'. unprocessed data == len(bytes) - index
+	Bytes []byte
+	Index int // index of processed data within 'bytes'. unprocessed data == len(bytes) - index
 	eof bool
 }
 
-func (self *parsingBuffer) NewError(details string) error {
-	return errors.New(self.fileType + " parsing error: " + details)
+func (self *ParsingBuffer) NewError(details string) error {
+	return errors.New(self.FileType + " parsing error: " + details)
 }
 
-func (self *parsingBuffer) InitBuffers() {
-	self.tempBuff = make([]byte, 1024)
-	self.bytes    = make([]byte, 0, 1024)
-	self.index = 0
+func (self *ParsingBuffer) InitBuffers() {
+	self.TempBuff = make([]byte, 1024)
+	self.Bytes    = make([]byte, 0, 1024)
+	self.Index = 0
 	self.eof = false
 }
 
-func (self *parsingBuffer) InitGzipReader(reader io.Reader) error {
+func (self *ParsingBuffer) InitGzipReader(reader io.Reader) error {
 	var err error
 	self.gzipReader, err = gzip.NewReader(reader)
 	return err
 }
 
-func (self *parsingBuffer) EnsureEOF() error {
+func (self *ParsingBuffer) EnsureEOF() error {
 	if self.eof { return nil }
-	preIndex := self.index
+	preIndex := self.Index
 	err := self.readMore()
 	if err != nil { return err }
-	if self.index > preIndex {
+	if self.Index > preIndex {
 		return errors.New("file continues beyond the expected end")
 	}
 	if !self.eof { panic("broken code") }
@@ -50,16 +50,16 @@ func (self *parsingBuffer) EnsureEOF() error {
 }
 
 // utility function called to read more data
-func (self *parsingBuffer) readMore() error {
+func (self *ParsingBuffer) readMore() error {
 	for retries := 0; retries < 3; retries++ {
 		// read and process read bytes
-		n, err := self.gzipReader.Read(self.tempBuff)
+		n, err := self.gzipReader.Read(self.TempBuff)
 		if n > 0 {
-			self.bytes = growSliceByN(self.bytes, n)
-			if len(self.bytes) > MaxFontDataSize {
+			self.Bytes = GrowSliceByN(self.Bytes, n)
+			if len(self.Bytes) > MaxFontDataSize {
 				return self.NewError("font data size exceeds limit")
 			}
-			k := copy(self.bytes[len(self.bytes) - n : ], self.tempBuff[ : n])
+			k := copy(self.Bytes[len(self.Bytes) - n : ], self.TempBuff[ : n])
 			if k != n { panic("broken code") }
 		}
 
@@ -79,107 +79,107 @@ func (self *parsingBuffer) readMore() error {
 	return self.NewError("repeated empty reads")
 }
 
-func (self *parsingBuffer) readUpTo(newIndex int) error {
-	if newIndex <= self.index { panic("readUpTo() misuse") }
-	for len(self.bytes) < newIndex {
+func (self *ParsingBuffer) readUpTo(newIndex int) error {
+	if newIndex <= self.Index { panic("readUpTo() misuse") }
+	for len(self.Bytes) < newIndex {
 		if self.eof {
 			return self.NewError("premature end of file (or font offsets are wrong)")
 		}
 		err := self.readMore()
 		if err != nil { return err }	
 	}
-	self.index = newIndex
+	self.Index = newIndex
 	return nil
 }
 
-func (self *parsingBuffer) AdvanceBytes(n int) error {
+func (self *ParsingBuffer) AdvanceBytes(n int) error {
 	if n == 0 { return nil }
 	if n < 0 { panic("AdvanceBytes(N) where N < 0") }
-	return self.readUpTo(self.index + n)
+	return self.readUpTo(self.Index + n)
 }
 
-func (self *parsingBuffer) AdvanceShortSlice() error {
+func (self *ParsingBuffer) AdvanceShortSlice() error {
 	sliceLen, err := self.ReadUint8()
 	if err != nil { return err }	
 	return self.AdvanceBytes(int(sliceLen))
 }
 
-func (self *parsingBuffer) ReadUint64() (uint64, error) {
-	index := self.index
+func (self *ParsingBuffer) ReadUint64() (uint64, error) {
+	index := self.Index
 	err := self.readUpTo(index + 8)
 	if err != nil { return 0, err }
-	return decodeUint64LE(self.bytes[index : ]), nil
+	return DecodeUint64LE(self.Bytes[index : ]), nil
 }
 
-func (self *parsingBuffer) ReadUint32() (uint32, error) {
-	index := self.index
+func (self *ParsingBuffer) ReadUint32() (uint32, error) {
+	index := self.Index
 	err := self.readUpTo(index + 4)
 	if err != nil { return 0, err }
-	return decodeUint32LE(self.bytes[index : ]), nil
+	return DecodeUint32LE(self.Bytes[index : ]), nil
 }
 
-func (self *parsingBuffer) ReadInt32() (int32, error) {
+func (self *ParsingBuffer) ReadInt32() (int32, error) {
 	n, err := self.ReadUint32()
 	return int32(n), err
 }
 
-func (self *parsingBuffer) ReadUint16() (uint16, error) {
-	index := self.index
+func (self *ParsingBuffer) ReadUint16() (uint16, error) {
+	index := self.Index
 	err := self.readUpTo(index + 2)
 	if err != nil { return 0, err }
-	return decodeUint16LE(self.bytes[index : ]), nil
+	return DecodeUint16LE(self.Bytes[index : ]), nil
 }
 
-func (self *parsingBuffer) ReadUint8() (uint8, error) {
-	index := self.index
+func (self *ParsingBuffer) ReadUint8() (uint8, error) {
+	index := self.Index
 	err := self.readUpTo(index + 1)
 	if err != nil { return 0, err }
-	return self.bytes[index], nil
+	return self.Bytes[index], nil
 }
 
-func (self *parsingBuffer) ReadInt8() (int8, error) {
-	index := self.index
+func (self *ParsingBuffer) ReadInt8() (int8, error) {
+	index := self.Index
 	err := self.readUpTo(index + 1)
 	if err != nil { return 0, err }
-	return int8(self.bytes[index]), nil
+	return int8(self.Bytes[index]), nil
 }
 
 // Returns bool value, new index, and an error if format was incorrect.
-func (self *parsingBuffer) ReadBool() (bool, error) {
+func (self *ParsingBuffer) ReadBool() (bool, error) {
 	value, err := self.ReadUint8()
 	if err != nil { return false, err }
 	if value == 0 { return false, nil }
 	if value == 1 { return true , nil }
-	return false, self.NewError(boolErrCheck(value).Error())
+	return false, self.NewError(BoolErrCheck(value).Error())
 }
 
-func (self *parsingBuffer) ReadShortStr() (string, error) {
+func (self *ParsingBuffer) ReadShortStr() (string, error) {
 	length, err := self.ReadUint8()
 	if err != nil { return "", err }
 	if length == 0 { return "", nil }
-	index := self.index
+	index := self.Index
 	err = self.readUpTo(index + int(length))
 	if err != nil { return "", err }
-	return unsafe.String(&self.bytes[index], int(length)), nil
+	return unsafe.String(&self.Bytes[index], int(length)), nil
 }
 
-func (self *parsingBuffer) ReadString() (string, error) {
+func (self *ParsingBuffer) ReadString() (string, error) {
 	length, err := self.ReadUint16()
 	if err != nil { return "", err }
 	if length == 0 { return "", nil }
-	index := self.index
+	index := self.Index
 	err = self.readUpTo(index + int(length))
 	if err != nil { return "", err }
-	return unsafe.String(&self.bytes[index], int(length)), nil
+	return unsafe.String(&self.Bytes[index], int(length)), nil
 }
 
-func (self *parsingBuffer) ValidateBasicName(name string) error {
-	err := validateBasicName(name)
+func (self *ParsingBuffer) ValidateBasicName(name string) error {
+	err := ValidateBasicName(name)
 	if err == nil { return nil }
 	return self.NewError(err.Error())
 }
 
-func validateBasicName(name string) error {
+func ValidateBasicName(name string) error {
 	if len(name) > 32 { return errors.New("basic name can't exceed 32 characters") }
 	if len(name) == 0 { return errors.New("basic name can't be empty") }
 	if name[0] == '-' { return errors.New("basic name can't start with a hyphen") }
@@ -208,7 +208,7 @@ func validateBasicName(name string) error {
 }
 
 // Repeated spaces and hyphens and stuff are ok on basic names.
-func (self *parsingBuffer) ValidateBasicSpacedName(name string) error {
+func (self *ParsingBuffer) ValidateBasicSpacedName(name string) error {
 	err := validateBasicSpacedName(name)
 	if err == nil { return nil }
 	return self.NewError(err.Error())

@@ -7,6 +7,8 @@ import "image/color"
 import "compress/gzip"
 import "unsafe"
 
+import "github.com/tinne26/ggfnt/internal"
+
 // A [Font] is a read-only object that contains all the data required to
 // use a font. To create a [Font], we use the [Parse]() method.
 //
@@ -19,23 +21,7 @@ import "unsafe"
 //  - Use [Font.Vars]() to access information about the [FontVariables].
 //  - Use [Font.Mapping]() to access information about the [FontMapping].
 //  - Use [Font.Kerning]() to access information about the [FontKerning].
-type Font struct {
-	data []byte // already ungzipped, starting from HEADER (signature is ignored)
-
-	// offsets to specific points at which critical data appears
-	// (offsetToHeader is always zero)
-	offsetToMetrics uint32
-	offsetToGlyphNames uint32
-	offsetToGlyphMasks uint32
-	offsetToColorSections uint32
-	offsetToColorSectionNames uint32
-	offsetToVariables uint32
-	offsetToMappingModes uint32
-	offsetsToFastMapTables []uint32
-	offsetToMainMappings uint32 // part of mappings table
-	offsetToHorzKernings uint32
-	offsetToVertKernings uint32
-}
+type Font internal.Font
 
 // --- general methods ---
 
@@ -45,9 +31,9 @@ func (self *Font) Export(writer io.Writer) error {
 	if n != 6 { return errors.New("short write") }
 
 	gzipWriter := gzip.NewWriter(writer)
-	n, err = gzipWriter.Write(self.data)
+	n, err = gzipWriter.Write(self.Data)
 	if err != nil { return err }
-	if n != len(self.data) { return errors.New("short write") }
+	if n != len(self.Data) { return errors.New("short write") }
 	return gzipWriter.Close()
 }
 
@@ -94,54 +80,59 @@ func (self *Font) Kerning() *FontKerning { return (*FontKerning)(self) }
 
 type FontHeader Font
 func (self *FontHeader) FormatVersion() uint32 {
-	return decodeUint32LE(self.data[0 : 4])
+	return internal.DecodeUint32LE(self.Data[0 : 4])
 }
 func (self *FontHeader) ID() uint64 {
-	return decodeUint64LE(self.data[4 : 12])
+	return internal.DecodeUint64LE(self.Data[4 : 12])
 }
 func (self *FontHeader) VersionMajor() uint16 {
-	return decodeUint16LE(self.data[12 : 14])
+	return internal.DecodeUint16LE(self.Data[12 : 14])
 }
 func (self *FontHeader) VersionMinor() uint16 {
-	return decodeUint16LE(self.data[14 : 16])
+	return internal.DecodeUint16LE(self.Data[14 : 16])
 }
 func (self *FontHeader) FirstVersionDate() Date {
-	return decodeDate(self.data[16 : 20])
+	y, m, d := internal.DecodeDate(self.Data[16 : 20])
+	return Date{ Year: y, Month: m, Day: d }
 }
 func (self *FontHeader) MajorVersionDate() Date {
-	return decodeDate(self.data[20 : 24])
+	y, m, d := internal.DecodeDate(self.Data[20 : 24])
+	return Date{ Year: y, Month: m, Day: d }
 }
 func (self *FontHeader) MinorVersionDate() Date {
-	return decodeDate(self.data[24 : 28])
+	y, m, d := internal.DecodeDate(self.Data[24 : 28])
+	return Date{ Year: y, Month: m, Day: d }
 }
 func (self *FontHeader) Name() string {
-	nameLen := self.data[28]
-	return unsafe.String(&self.data[29], nameLen)
+	nameLen := self.Data[28]
+	return unsafe.String(&self.Data[29], nameLen)
 }
 func (self *FontHeader) Family() string {
-	nameLen   := self.data[28]
-	familyLen := self.data[29 + nameLen]
-	return unsafe.String(&self.data[30 + nameLen], familyLen)
+	nameLen   := self.Data[28]
+	familyLen := self.Data[29 + nameLen]
+	return unsafe.String(&self.Data[30 + nameLen], familyLen)
 }
 func (self *FontHeader) Author() string {
-	nameLen   := self.data[28]
-	familyLen := self.data[29 + nameLen]
-	authorLen := self.data[30 + nameLen + familyLen]
-	return unsafe.String(&self.data[31 + nameLen + familyLen], authorLen)
+	nameLen   := self.Data[28]
+	familyLen := self.Data[29 + nameLen]
+	authorLen := self.Data[30 + nameLen + familyLen]
+	return unsafe.String(&self.Data[31 + nameLen + familyLen], authorLen)
 }
 func (self *FontHeader) About() string {
-	nameLen   := self.data[28]
-	familyLen := self.data[29 + nameLen]
-	authorLen := self.data[30 + nameLen + familyLen]
+	nameLen   := self.Data[28]
+	familyLen := self.Data[29 + nameLen]
+	authorLen := self.Data[30 + nameLen + familyLen]
 	aboutIndex := 31 + nameLen + familyLen + authorLen
-	aboutLen := decodeUint16LE(self.data[aboutIndex : aboutIndex + 2])
-	return unsafe.String(&self.data[33 + nameLen + familyLen + authorLen], aboutLen)
+	aboutLen := internal.DecodeUint16LE(self.Data[aboutIndex : aboutIndex + 2])
+	return unsafe.String(&self.Data[33 + nameLen + familyLen + authorLen], aboutLen)
 }
 
 func (self *FontHeader) Validate(mode FmtValidation) error {
 	// default checks
 	if self.FormatVersion() != FormatVersion { return errors.New("invalid FormatVersion") }
-	if lazyEntropyUint64(self.ID()) < minEntropyID { return errors.New("font ID entropy too low") }
+	if internal.LazyEntropyUint64(self.ID()) < internal.MinEntropyID {
+		return errors.New("font ID entropy too low")
+	}
 	if self.Name() == "" { return errors.New("font name can't be empty") }
 
 	// strict checks
@@ -156,50 +147,50 @@ func (self *FontHeader) Validate(mode FmtValidation) error {
 
 type FontMetrics Font
 func (self *FontMetrics) NumGlyphs() uint16 {
-	return decodeUint16LE(self.data[self.offsetToMetrics + 0 : self.offsetToMetrics + 2])
+	return internal.DecodeUint16LE(self.Data[self.OffsetToMetrics + 0 : self.OffsetToMetrics + 2])
 }
 func (self *FontMetrics) HasVertLayout() bool {
-	return self.data[self.offsetToMetrics + 2] == 1
+	return self.Data[self.OffsetToMetrics + 2] == 1
 }
 func (self *FontMetrics) Monospaced() bool { return self.MonoWidth() != 0 }
 func (self *FontMetrics) MonoWidth() uint8 {
-	return self.data[self.offsetToMetrics + 3]
+	return self.Data[self.OffsetToMetrics + 3]
 }
 func (self *FontMetrics) Ascent() uint8 {
-	return self.data[self.offsetToMetrics + 4]
+	return self.Data[self.OffsetToMetrics + 4]
 }
 func (self *FontMetrics) ExtraAscent() uint8 {
-	return self.data[self.offsetToMetrics + 5]
+	return self.Data[self.OffsetToMetrics + 5]
 }
 func (self *FontMetrics) Descent() uint8 {
-	return self.data[self.offsetToMetrics + 6]
+	return self.Data[self.OffsetToMetrics + 6]
 }
 func (self *FontMetrics) ExtraDescent() uint8 {
-	return self.data[self.offsetToMetrics + 7]
+	return self.Data[self.OffsetToMetrics + 7]
 }
 func (self *FontMetrics) LowercaseAscent() uint8 {
-	return self.data[self.offsetToMetrics + 8]
+	return self.Data[self.OffsetToMetrics + 8]
 }
 func (self *FontMetrics) HorzInterspacing() uint8 {
-	return self.data[self.offsetToMetrics + 9]
+	return self.Data[self.OffsetToMetrics + 9]
 }
 func (self *FontMetrics) VertInterspacing() uint8 {
-	return self.data[self.offsetToMetrics + 10]
+	return self.Data[self.OffsetToMetrics + 10]
 }
 func (self *FontMetrics) LineGap() uint8 {
-	return self.data[self.offsetToMetrics + 11]
+	return self.Data[self.OffsetToMetrics + 11]
 }
 func (self *FontMetrics) VertLineWidth() uint8 {
-	return self.data[self.offsetToMetrics + 12]
+	return self.Data[self.OffsetToMetrics + 12]
 }
 func (self *FontMetrics) VertLineGap() uint8 {
-	return self.data[self.offsetToMetrics + 13]
+	return self.Data[self.OffsetToMetrics + 13]
 }
 
 func (self *FontMetrics) Validate(mode FmtValidation) error {
 	// default checks
 	if self.NumGlyphs() == 0 { return errors.New("font must define at least one glyph") }
-	err := boolErrCheck(self.data[self.offsetToMetrics + 2])
+	err := internal.BoolErrCheck(self.Data[self.OffsetToMetrics + 2])
 	if err != nil { return err }
 	if self.Ascent() == 0 { return errors.New("Ascent can't be zero") }
 	if self.ExtraAscent() > self.Ascent() {
@@ -226,7 +217,7 @@ func (self *FontGlyphs) Count() uint16 {
 	return ((*Font)(self)).Metrics().NumGlyphs()
 }
 func (self *FontGlyphs) NamedCount() uint16 {
-	return decodeUint16LE(self.data[self.offsetToGlyphNames + 0 : self.offsetToGlyphNames + 2])
+	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphNames + 0 : self.OffsetToGlyphNames + 2])
 }
 func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
 func (self *FontGlyphs) RasterizeMask(glyph GlyphIndex) *image.Alpha { panic("unimplemented") }
@@ -298,11 +289,11 @@ type VarKey uint8
 // kind of state must be managed by a renderer or similar.
 type FontVariables Font
 func (self *FontVariables) Count() uint8 {
-	return self.data[self.offsetToVariables]
+	return self.Data[self.OffsetToVariables]
 }
 func (self *FontVariables) NamedCount() uint8 {
-	index := self.offsetToVariables + 1 + uint32(self.Count())*3
-	return self.data[index]
+	index := self.OffsetToVariables + 1 + uint32(self.Count())*3
+	return self.Data[index]
 }
 func (self *FontVariables) FindIndexByName(name string) VarKey { panic("unimplemented") }
 func (self *FontVariables) GetInitValue(index VarKey) uint8 { panic("unimplemented") }

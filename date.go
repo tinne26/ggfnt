@@ -3,6 +3,8 @@ package ggfnt
 import "fmt"
 import "time"
 
+import "github.com/tinne26/ggfnt/internal"
+
 type Date struct {
 	Year uint16
 	Month uint8
@@ -15,7 +17,7 @@ func CurrentDate() Date {
 }
 
 func (self *Date) appendTo(data []byte) []byte {
-	return append(appendUint16LE(data, self.Year), self.Month, self.Day)
+	return append(internal.AppendUint16LE(data, self.Year), self.Month, self.Day)
 }
 
 // Doesn't check if the date is in the future, only if it's
