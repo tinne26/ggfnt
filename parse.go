@@ -123,12 +123,18 @@ func Parse(reader io.Reader) (*Font, error) {
 	// --- color sections ---
 	if traceParsing { fmt.Printf("parsing color sections... (index = %d)\n", parser.Index) }
 	font.OffsetToColorSections = uint32(parser.Index)
-	numColorSections, err := parser.ReadUint8()
+	numDyes, err := parser.ReadUint8()
 	if err != nil { return &font, err }
-	if numColorSections == 0 { parser.NewError("NumColorSections must be at least 1") }
-
-	err = parser.AdvanceBytes(int(numColorSections)) // advance ColorSectionModes
+	numPalettes, err := parser.ReadUint8()
 	if err != nil { return &font, err }
+	if numDyes == 0 && numPalettes == 0 {
+		return &font, parser.NewError("NumDyes + NumPalettes must be at least 1")
+	}
+	if int(numDyes) + int(numPalettes) > 255 {
+		return &font, parser.NewError("NumDyes + NumPalettes can't exceed 255")
+	}
+	numColorSections := numDyes + numPalettes // we know this can't overflow
+	
 	err = parser.AdvanceBytes(int(numColorSections - 1)) // advance ColorSectionStarts
 	if err != nil { return &font, err }
 	lastRangeStart, err := parser.ReadUint8()
@@ -142,6 +148,9 @@ func Parse(reader io.Reader) (*Font, error) {
 	if colorSectionsLen > uint16(numColors)*4 {
 		return &font, parser.NewError("ColorSectionEndOffsets declares ColorSections to end beyond allowed")
 	}
+	if colorSectionsLen < uint16(numPalettes)*4 + uint16(numDyes) {
+		return &font, parser.NewError("ColorSectionEndOffsets declares ColorSections to end before allowed")
+	}
 	err = parser.AdvanceBytes(int(colorSectionsLen)) // skip color sections
 	if err != nil { return &font, err }
 
@@ -153,6 +162,9 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, err }
 	if sectionNamesLen > uint16(numColorSections)*32 {
 		return &font, parser.NewError("ColorSectionNameEndOffsets declares ColorSectionNames to end beyond allowed")
+	}
+	if sectionNamesLen < uint16(numColorSections) {
+		return &font, parser.NewError("ColorSectionNameEndOffsets declares ColorSectionNames to end before allowed")
 	}
 	err = parser.AdvanceBytes(int(sectionNamesLen)) // advance ColorSectionNames
 	if err != nil { return &font, err }

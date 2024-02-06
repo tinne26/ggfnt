@@ -294,8 +294,8 @@ func (self *Font) SwitchFastMappingTables(i, j int) error {
 
 func (self *Font) AddFastMappingTable(start, end rune) error {
 	table, err := newFastMappingTable(start, end)
-	table.builder = self
 	if err != nil { return err }
+	table.builder = self
 	// TODO: check for max size error?
 	self.fastMappingTables = append(self.fastMappingTables, table)
 	return nil

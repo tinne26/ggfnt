@@ -2,9 +2,14 @@ package ggfnt
 
 type GlyphIndex uint16
 const (
-	GlyphMissing GlyphIndex = 56789
-	GlyphZilch   GlyphIndex = 56790
-	GlyphNewLine GlyphIndex = 56791
+	GlyphMissing   GlyphIndex = 56789
+	GlyphZilch     GlyphIndex = 56790
+	GlyphTextStart GlyphIndex = 56791
+	GlyphNewLine   GlyphIndex = 56792
+	GlyphTab       GlyphIndex = 56793
+
+	GlyphCustomMin GlyphIndex = 60000
+	GlyphCustomMax GlyphIndex = 62000
 )
 func (self GlyphIndex) String() string { panic("unimplemented") }
 func (self GlyphIndex) Type() GlyphType { panic("unimplemented") }

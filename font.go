@@ -37,6 +37,10 @@ func (self *Font) Export(writer io.Writer) error {
 	return gzipWriter.Close()
 }
 
+func (self *Font) RawSize() int {
+	return len(self.Data)
+}
+
 // TODO: don't worry about this until actually implementing validation, I'll
 //       see there how easy it is to make, and what might or might not be reasonable
 type FmtValidation bool
@@ -239,12 +243,30 @@ func (self *FontGlyphs) Validate(mode FmtValidation) error {
 
 // --- color section ---
 
+// TODO: maybe given the importance of the "main" dye, either I change spec
+// or I provide some function to easily search for it? Or "HasDyes?" hmm.
 type FontColor Font
+
+func (self *FontColor) NumDyes() uint8 {
+	panic("unimplemented")
+}
+
 func (self *FontColor) EachDye(func(DyeKey, string)) {
 	// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
 	panic("unimplemented")
 }
+func (self *FontColor) EachDyeAlpha(DyeKey, func(uint8)) {
+	panic("unimplemented")
+}
+
+// An invalid dye key will always return (0, 0). A valid dye key will
+// will always return start and ends > 0. Both start and end are inclusive.
+// Given a valid dye key, the amount of alpha variants is (end - start + 1).
 func (self *FontColor) GetDyeRange(key DyeKey) (start, end uint8) {
+	panic("unimplemented")
+}
+
+func (self *FontColor) NumPalettes() uint8 {
 	panic("unimplemented")
 }
 
@@ -262,7 +284,7 @@ func (self *FontColor) GetPaletteRange(key PaletteKey) (start, end uint8) {
 	panic("unimplemented")
 }
 
-func (self *FontColor) NumColors() uint8 {
+func (self *FontColor) Count() uint8 {
 	panic("unimplemented") // (255 - ColorSectionStarts[last]) + 1
 }
 
@@ -295,10 +317,12 @@ func (self *FontVariables) NamedCount() uint8 {
 	index := self.OffsetToVariables + 1 + uint32(self.Count())*3
 	return self.Data[index]
 }
-func (self *FontVariables) FindIndexByName(name string) VarKey { panic("unimplemented") }
-func (self *FontVariables) GetInitValue(index VarKey) uint8 { panic("unimplemented") }
-func (self *FontVariables) GetRange(index VarKey) (minValue, maxValue uint8) { panic("unimplemented") }
-func (self *FontVariables) Each(func(index VarKey, name string)) { panic("unimplemented") } // only named variables are exposed
+func (self *FontVariables) FindKeyByName(name string) VarKey { panic("unimplemented") }
+func (self *FontVariables) GetInitValue(key VarKey) uint8 { panic("unimplemented") }
+func (self *FontVariables) GetRange(key VarKey) (minValue, maxValue uint8) { panic("unimplemented") }
+func (self *FontVariables) Each(func(key VarKey, name string)) {
+	// only named variables are exposed ?
+}
 
 func (self *FontVariables) Validate(mode FmtValidation) error {
 	// default checks

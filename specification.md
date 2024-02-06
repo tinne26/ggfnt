@@ -170,13 +170,13 @@ Names must conform to `basic-name-regexp`. Names aren't meant to support naming 
 
 Actual color table:
 ```Golang
-NumColorSections uint8 // must be at least 1
-ColorSectionModes [NumColorSections]uint8 // if 1, palette, if 0, alpha scale
-ColorSectionStarts [NumColorSections]uint8 // inclusive, can't be zero, in descending order
-ColorSectionEndOffsets [NumColorSection]uint16 // section length must be checked at parsing time
+NumDyes uint8
+NumPalettes uint8 // sum of NumDyes + NumPalettes can't exceed 255
+ColorSectionStarts [NumDyes + NumPalettes]uint8 // inclusive, can't be zero, in descending order
+ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length must be checked at parsing time
 ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
-ColorSectionNameEndOffsets [NumColorSections]uint16
-ColorSectionNames blob[ColorSectionDefinition]
+ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
+ColorSectionNames blob[...]
 ```
 
 Note for renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
@@ -333,6 +333,8 @@ Transitions are defined by a stream of bytes:
 	- Operator: 00 is ==, 01 is !=, 10 is <, 11 is <=. If 0b0000_0X00 is set, the second argument will also be a variable instead of a constant. If 0b0000_X000 is set, we have an AND operation. Otherwise we have an OR.
 	- First argument: variable ID.
 	- Second argument: constant or variable ID, depending on the operator.
+
+TODO: I need glyph replacement. I need a "replace last N glyphs with Y". I might need lookaheads, alternatively. This is crucial for ligatures and stuff. Maybe replacement FSMs and operation FSMs could be different? hmmm... Like, replacements sound like they could also be done with a different, simpler system.
 
 The FSM max jumping sequence length is restricted to 32 in order to avoid infinite loops.
 

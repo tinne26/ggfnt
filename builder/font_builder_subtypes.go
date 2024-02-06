@@ -73,12 +73,15 @@ func newFastMappingTable(start, end rune) (*FastMappingTable, error) {
 	table.startCodePoint = start
 	table.endCodePoint   = end
 	if err != nil { return nil, err }
-	size := (end + 1) - start
+	size := int((end + 1) - start)
 	table.codePointModes = make([]uint8, size)
 	for i := 0; i < len(table.codePointModes); i++ {
 		table.codePointModes[i] = 255
 	}
 	table.codePointMainIndices = make([]uint64, size)
+	for i := 0; i < size; i++ {
+		table.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
+	}
 	table.codePointModeIndices = make([][]uint64, size)
 	table.recomputeNumCodePointModeIndices()
 	table.condition[0] = internal.MappingConditionArg1Const | internal.MappingConditionArg2Const
@@ -108,7 +111,7 @@ func (self *FastMappingTable) dataSize() int {
 
 func (self *FastMappingTable) validateRange(start, end rune) error {
 	// start point validation
-	if start <= ' ' { return errors.New("mapping range can't start before ' ' (space)") }
+	if start < ' ' { return errors.New("mapping range can't start before ' ' (space)") }
 	if end < start { return errors.New("invalid range") }
 
 	// size validation
@@ -274,6 +277,9 @@ func (self *FastMappingTable) SetRange(start, end rune) error {
 				self.codePointMainIndices[ : relevantLen],
 				self.codePointMainIndices[indexingShift : indexingShift + relevantLen],
 			)
+			for i := relevantLen; i < newSize; i++ {
+				self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
+			}
 			copy(
 				self.codePointModeIndices[ : relevantLen],
 				self.codePointModeIndices[indexingShift : indexingShift + relevantLen],
@@ -283,6 +289,7 @@ func (self *FastMappingTable) SetRange(start, end rune) error {
 				self.codePointModes[indexingShift : indexingShift + relevantLen],
 			)
 		}
+		
 	} else if indexingShift < 0 { // moving range left (data is moved right)
 		relevantLen := min(tableLen, newSize) + indexingShift
 		if relevantLen > 0 {
@@ -290,6 +297,9 @@ func (self *FastMappingTable) SetRange(start, end rune) error {
 				self.codePointMainIndices[-indexingShift : -indexingShift + relevantLen],
 				self.codePointMainIndices[ : relevantLen],
 			)
+			for i := 0; i < -indexingShift; i++ {
+				self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
+			}
 			copy(
 				self.codePointModeIndices[-indexingShift : -indexingShift + relevantLen],
 				self.codePointModeIndices[ : relevantLen],
@@ -299,8 +309,11 @@ func (self *FastMappingTable) SetRange(start, end rune) error {
 				self.codePointModes[ : relevantLen],
 			)
 		}
-	} else {
-		panic("unexpected")
+	} else { // this can happen if we are only extending the end point
+		for i := tableLen; i < newSize; i++ {
+			self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
+		}
+		
 	}
 	self.startCodePoint, self.endCodePoint = start, end
 

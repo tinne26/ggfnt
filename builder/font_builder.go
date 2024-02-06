@@ -65,10 +65,12 @@ type Font struct {
 	glyphData map[uint64]*glyphData
 
 	// color sections
-	colorSectionModes []uint8
+	numDyes uint8
+	numPalettes uint8
 	colorSectionStarts []uint8 // prevent modification if any options are assigned
 	colorSectionNames []string
-	colorSections [][]color.Color // either color.RGBA or color.Alpha
+	dyeAlphas [][]uint8
+	paletteColors [][]color.RGBA
 
 	// variables
 	variables []variableEntry // removing is expensive and requires many checks and reports
@@ -137,10 +139,10 @@ func New() *Font {
 	builder.glyphData = make(map[uint64]*glyphData, 32)
 
 	// --- color sections ---
-	builder.colorSectionModes = []uint8{0} // 0 for alpha scale (dye), 1 for palette
+	builder.numDyes = 1
 	builder.colorSectionStarts = []uint8{255} // inclusive
 	builder.colorSectionNames = []string{"main"}
-	builder.colorSections = [][]color.Color{[]color.Color{color.Alpha{255}}} // either color.RGBA or color.Alpha
+	builder.dyeAlphas = [][]uint8{[]uint8{255}}
 
 	// variables
 	// (nothing to initialize here)
@@ -291,43 +293,37 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	}
 
 	// --- color sections ---
-	if len(self.colorSectionModes) > 255 { panic(invalidInternalState) }
-	if len(self.colorSectionModes) != len(self.colorSectionStarts) { panic(invalidInternalState) }
-	if len(self.colorSectionModes) != len(self.colorSectionNames) { panic(invalidInternalState) }
-	if len(self.colorSectionModes) != len(self.colorSections) { panic(invalidInternalState) }
+	numColorSections := int(self.numDyes) + int(self.numPalettes)
+	if numColorSections > 255 { panic(invalidInternalState) }
+	if numColorSections == 0 { panic(invalidInternalState) }
+	if len(self.dyeAlphas) != int(self.numDyes) { panic(invalidInternalState) }
+	if len(self.paletteColors) != int(self.numPalettes) { panic(invalidInternalState) }
+	if len(self.colorSectionStarts) != numColorSections { panic(invalidInternalState) }
+	if len(self.colorSectionNames) != numColorSections { panic(invalidInternalState) }
 	font.OffsetToColorSections = uint32(len(data))
-	data = append(data, uint8(len(self.colorSectionModes))) // NumColorSections
-	data = append(data, self.colorSectionModes...) // ColorSectionModes
+	data = append(data, self.numDyes) // NumDyes
+	data = append(data, self.numPalettes) // NumPalettes
 	data = append(data, self.colorSectionStarts...) // ColorSectionStarts
 
 	var offset16 uint16
-	for i, _ := range self.colorSections { // // ColorSectionEndOffsets
-		if len(self.colorSections[i]) > 255 { panic(invalidInternalState) }
-		colorSectionNumColors := uint16(len(self.colorSections[i]))
-		switch self.colorSectionModes[i] {
-		case 0: // alpha
-			offset16 += colorSectionNumColors
-		case 1: // palette
-			offset16 += (colorSectionNumColors << 2)
-		default:
-			panic(invalidInternalState)
+	for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSectionEndOffsets
+		if i < self.numDyes {
+			offset16 += uint16(len(self.dyeAlphas[i]))
+		} else {
+			offset16 += uint16(len(self.paletteColors[i - self.numDyes]))*2
 		}
 		data = internal.AppendUint16LE(data, offset16)
 	}
 
-	for i, _ := range self.colorSections { // // ColorSections
-		switch self.colorSectionModes[i] {
-		case 0: // alpha
-			for j, _ := range self.colorSections[i] {
-				data = append(data, self.colorSections[i][j].(color.Alpha).A)
+	for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSections
+		if i < self.numDyes { // alpha
+			for _, alpha := range self.dyeAlphas[i] {
+				data = append(data, alpha)
 			}
-		case 1: // palette
-			for j, _ := range self.colorSections[i] {
-				rgba := self.colorSections[i][j].(color.RGBA)
+		} else {
+			for _, rgba := range self.paletteColors[i - self.numDyes] {
 				data = append(data, rgba.R, rgba.G, rgba.B, rgba.A)
 			}
-		default:
-			panic(invalidInternalState)
 		}
 	}
 
