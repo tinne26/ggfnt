@@ -3,6 +3,8 @@ package builder
 import "errors"
 import "image"
 import "regexp"
+import "strconv"
+import "unsafe"
 
 import "github.com/tinne26/ggfnt"
 import "github.com/tinne26/ggfnt/internal"
@@ -33,363 +35,519 @@ type glyphData struct {
 	Mask *image.Alpha
 }
 
-type variableEntry struct {
+type settingEntry struct {
 	Name string
-	DefaultValue uint8
-	MinValue uint8
-	MaxValue uint8
+	Values []uint8
 }
 
-type codePointMapping struct {
-	Mode uint8
-	Glyphs []uint64 // glyph UIDs
+type mappingSwitchEntry struct {
+	Settings []uint8
 }
 
-func (self *variableEntry) appendValuesTo(buffer []byte) []byte {
-	return append(buffer, self.DefaultValue, self.MinValue, self.MaxValue)
+type mappingEntry struct {
+	SwitchType uint8
+	SwitchCases []mappingGroup
 }
 
-type mappingMode struct {
-	Name string
-	Program []uint8
-}
-
-type FastMappingTable struct {
-	builder *Font // back reference
-	condition [3]uint8
-	startCodePoint rune // inclusive
-	endCodePoint   rune // exclusive
-	codePointModes []uint8 // if 0, no mode is used
-	codePointMainIndices []uint64
-	codePointModeIndices [][]uint64
-	// notice: ^ we use as many mode indices as table length, leaving empty if necessary.
-	//           tables are not that big and this makes general edition easier
-	numCodePointModeIndices int
-}
-
-func newFastMappingTable(start, end rune) (*FastMappingTable, error) {
-	var table FastMappingTable
-	err := table.validateRange(start, end)
-	table.startCodePoint = start
-	table.endCodePoint   = end
-	if err != nil { return nil, err }
-	size := int((end + 1) - start)
-	table.codePointModes = make([]uint8, size)
-	for i := 0; i < len(table.codePointModes); i++ {
-		table.codePointModes[i] = 255
+// Before calling this, the caller should cross check switch type with 
+// the number of SwitchCases.
+func (self *mappingEntry) AppendTo(data []byte, glyphLookup map[uint64]uint16, scratchBuffer []uint64) ([]byte, []uint64, error) {
+	var err error
+	data = append(data, self.SwitchType)
+	
+	// single glyph case
+	if self.SwitchType == 255 {
+		glyphIndex, found := glyphLookup[self.SwitchCases[0].Glyphs[0]]
+		if !found { panic(invalidInternalState) }
+		return internal.AppendUint16LE(data, glyphIndex), scratchBuffer, nil
 	}
-	table.codePointMainIndices = make([]uint64, size)
-	for i := 0; i < size; i++ {
-		table.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
+
+	// more involved switch case
+	for i, _ := range self.SwitchCases {
+		data, scratchBuffer, err = self.SwitchCases[i].AppendTo(data, glyphLookup, scratchBuffer)
+		if err != nil { return data, scratchBuffer, err }
+		if len(data) > ggfnt.MaxFontDataSize {
+			return data, scratchBuffer, errFontDataExceedsMax
+		}
 	}
-	table.codePointModeIndices = make([][]uint64, size)
-	table.recomputeNumCodePointModeIndices()
-	table.condition[0] = internal.MappingConditionArg1Const | internal.MappingConditionArg2Const
-	return &table, nil
+	return data, scratchBuffer, nil
 }
 
-func (self *FastMappingTable) recomputeNumCodePointModeIndices() {
-	self.numCodePointModeIndices = 0
-	for i, _ := range self.codePointModeIndices {
-		codePointNumIndices := len(self.codePointModeIndices[i])
-		if self.codePointModes[i] == 255 {
-			if codePointNumIndices != 0 {
-				panic(invalidInternalState)
+type mappingGroup struct {
+	Glyphs []uint64
+	AnimationFlags ggfnt.AnimationFlags
+}
+
+func (self *mappingGroup) AppendTo(data []byte, glyphLookup map[uint64]uint16, scratchBuffer []uint64) ([]byte, []uint64, error) {
+	if len(self.Glyphs) == 0 || len(self.Glyphs) > 128 { panic(invalidInternalState) }
+	
+	// append group size
+	data = append(data, uint8(len(self.Glyphs)))
+
+	// single glyph case
+	if len(self.Glyphs) == 1 {
+		glyphIndex, found := glyphLookup[self.Glyphs[0]]
+		if !found { panic(invalidInternalState) }
+		return internal.AppendUint16LE(data, glyphIndex), scratchBuffer, nil
+	}
+	
+	// --- group cases ---
+
+	// add animations info
+	data = append(data, uint8(self.AnimationFlags))
+
+	// get actual glyph indices
+	scratchBuffer = internal.SetSliceSize(scratchBuffer, len(self.Glyphs))
+	for i := 0; i < len(self.Glyphs); i++ {
+		glyphIndex, found := glyphLookup[self.Glyphs[i]]
+		if !found { panic(invalidInternalState) }
+		scratchBuffer[i] = uint64(glyphIndex)
+	}
+
+	// find biggest continuous groups (if any)
+	firstGroupStart, firstGroupLen, secondGroupStart, secondGroupLen := findContinuousGroups(scratchBuffer)
+
+	// --- append data for all 5 potential subgroups ---
+	// first potential non-consecutive group
+	if firstGroupStart != 0 {
+		data = append(data, firstGroupStart) // append group size
+		for i := uint8(0); i < firstGroupStart; i++ { // append group glyphs
+			data = internal.AppendUint16LE(data, uint16(scratchBuffer[i]))
+		}
+	}
+
+	// first potential consecutive group
+	if firstGroupLen > 0 {
+		data = append(data, 0b1000_0000 | firstGroupLen)
+		data = internal.AppendUint16LE(data, uint16(scratchBuffer[firstGroupStart]))
+	}
+
+	// second potential non-consecutive group
+	firstGroupEnd := firstGroupStart + firstGroupLen
+	if firstGroupEnd < firstGroupStart { panic(invalidInternalState) } // unreasonable overflow
+	if secondGroupStart > firstGroupEnd {
+		data = append(data, secondGroupStart - firstGroupEnd + 1)
+		for i := firstGroupEnd; i < secondGroupStart; i++ {
+			data = internal.AppendUint16LE(data, uint16(scratchBuffer[i]))
+		}
+	}
+
+	// second potential consecutive group
+	if secondGroupLen > 0 {
+		data = append(data, 0b1000_0000 | secondGroupLen)
+		data = internal.AppendUint16LE(data, uint16(scratchBuffer[secondGroupStart]))
+	}
+
+	// third potential non-consecutive group
+	secondGroupEnd := secondGroupStart + secondGroupLen
+	if secondGroupEnd < secondGroupStart { panic(invalidInternalState) } // unreasonable overflow
+	if len(self.Glyphs) > int(secondGroupEnd) {
+		data = append(data, uint8(len(self.Glyphs)) - secondGroupEnd + 1)
+		for i := int(secondGroupEnd); i < len(self.Glyphs); i++ {
+			data = internal.AppendUint16LE(data, uint16(scratchBuffer[i]))
+		}
+	}
+
+	// clean up and return
+	scratchBuffer = scratchBuffer[ : 0]
+	return data, scratchBuffer, nil
+}
+
+// Returns first consecutive group start index, then its length, and then
+// second consecutive group start index, and its length.
+func findContinuousGroups(glyphIndices []uint64) (uint8, uint8, uint8, uint8) {
+	if len(glyphIndices) > 128 { panic(invalidInternalState) }
+
+	var longestGroupStart uint8 = uint8(len(glyphIndices))
+	var longestGroupLen uint8
+	var secondLongestGroupStart uint8 = uint8(len(glyphIndices))
+	var secondLongestGroupLen uint8
+	
+	var currentGroupActive bool = false
+	var currentGroupLen uint8
+	var currentGroupStart uint8
+	var prevIndex uint64 = 65536 // outside uint16 range
+	for i := 0; i < len(glyphIndices); i++ {
+		if glyphIndices[i] == prevIndex + 1 {
+			if currentGroupActive {
+				currentGroupLen += 1
+			} else {
+				currentGroupActive = true
+				currentGroupStart = uint8(i) - 1
+				currentGroupLen = 2
 			}
-		} else if codePointNumIndices < 2 {
-			panic(invalidInternalState)
 		} else {
-			self.numCodePointModeIndices += codePointNumIndices
-		}
-	}
-}
+			if currentGroupActive {
+				if currentGroupLen > longestGroupLen {
 
-func (self *FastMappingTable) dataSize() int {
-	tableLen := self.tableLen()
-	return 11 + tableLen + (tableLen << 1) + self.numCodePointModeIndices*2
-}
-
-func (self *FastMappingTable) validateRange(start, end rune) error {
-	// start point validation
-	if start < ' ' { return errors.New("mapping range can't start before ' ' (space)") }
-	if end < start { return errors.New("invalid range") }
-
-	// size validation
-	newSize := (end + 1) - start
-	if newSize > internal.MaxFastMappingTableCodePoints {
-		return errors.New("fast mapping table can't be so big")
-	}
-	return nil
-}
-
-// Both start and end are included.
-func (self *FastMappingTable) GetRange() (start, end rune) {
-	return self.startCodePoint, self.endCodePoint
-}
-
-// Reset the fast mapping table data so you can safely set a new range
-// and fill again.
-func (self *FastMappingTable) ClearIndices() {
-	for i, _ := range self.codePointMainIndices {
-		self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
-	}
-	for i, _ := range self.codePointModeIndices {
-		self.codePointModeIndices[i] = self.codePointModeIndices[i][ : 0]
-	}
-}
-
-func (self *FastMappingTable) Map(codePoint rune, glyphUID uint64) error {
-	if codePoint < self.startCodePoint || codePoint > self.endCodePoint {
-		return errors.New("code point out of range")
-	}
-	_, hasData := self.builder.glyphData[glyphUID]
-	if !hasData {
-		return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
-	}
-
-	index := codePoint - self.startCodePoint
-	if self.codePointModes[index] != 255 {
-		assignedIndices := len(self.codePointModeIndices[index])
-		if assignedIndices < 2 { panic(invalidInternalState) }
-		self.codePointModeIndices[index] = self.codePointModeIndices[index][ : 0] // clear
-		self.numCodePointModeIndices -= assignedIndices
-	}
-	self.codePointModes[index] = 255 // set mapping in direct mode
-	self.codePointMainIndices[index] = glyphUID
-	return nil
-}
-
-func (self *FastMappingTable) MapWithMode(codePoint rune, mode uint8, modeGlyphUIDs ...uint64) error {
-	// all error checks
-	if codePoint < self.startCodePoint || codePoint > self.endCodePoint {
-		return errors.New("code point out of range")
-	}
-	if len(modeGlyphUIDs) < 2 {
-		return errors.New("custom mode mapping requires mapping at least 2 glyphs")
-	}
-	if int(mode) >= len(self.builder.mappingModes) {
-		return errors.New("attempted to use undefined custom mode mapping")
-	}
-	for _, modeGlyphUID := range modeGlyphUIDs {
-		_, hasData := self.builder.glyphData[modeGlyphUID]
-		if !hasData {
-			return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
+				} else if currentGroupLen > secondLongestGroupLen {
+					secondLongestGroupStart = currentGroupStart
+					secondLongestGroupLen = currentGroupLen
+				}
+				currentGroupActive = false
+			}
 		}
 	}
 
-	// TODO: I haven't actually checked the size excess
-	
-	// everything should be smooth now
-	index := codePoint - self.startCodePoint
-	if self.codePointModes[index] != 255 {
-		assignedIndices := len(self.codePointModeIndices[index])
-		if assignedIndices < 2 { panic(invalidInternalState) }
-		self.codePointModeIndices[index] = self.codePointModeIndices[index][ : 0] // clear
-		self.numCodePointModeIndices -= assignedIndices
+	if longestGroupStart < secondLongestGroupStart {
+		return longestGroupStart, longestGroupLen, secondLongestGroupStart, secondLongestGroupLen
+	} else {
+		return secondLongestGroupStart, secondLongestGroupLen, longestGroupStart, longestGroupLen
+	}
+}
+
+type glyphRewriteRule struct {
+	condition uint8 // (255 if none)
+	replacement uint64 // glyph index
+	sequence []uint64 // glyph UIDs (255 at most)
+}
+
+func (self *glyphRewriteRule) AppendTo(data []byte, glyphLookup map[uint64]uint16) []byte {
+	data = append(data, self.condition, uint8(len(self.sequence)))
+	glyphIndex, found := glyphLookup[self.replacement]
+	if !found { panic(invalidInternalState) }
+	data = internal.AppendUint16LE(data, glyphIndex)
+	for _, glyphUID := range self.sequence {
+		glyphIndex, found = glyphLookup[glyphUID]
+		if !found { panic(invalidInternalState) }
+		data = internal.AppendUint16LE(data, glyphIndex)
+	}
+	return data
+}
+
+type utf8RewriteRule struct {
+	condition uint8
+	replacement rune
+	sequence []rune
+}
+func (self *utf8RewriteRule) AppendTo(data []byte) []byte {
+	data = append(data, self.condition, uint8(len(self.sequence)))
+	data = internal.AppendUint32LE(data, uint32(self.replacement))
+	for _, codePoint := range self.sequence {
+		data = internal.AppendUint32LE(data, uint32(codePoint))
+	}
+	return data
+}
+
+type rewriteCondition struct {
+	EditorName string
+	data []uint8
+}
+
+// Returns a human-friendly string representation of the rewrite condition.
+// This takes a bit of time to create, but it's not crazy expensive or anything,
+// so if you are only displaying one rewrite condition it's fine to call it
+// every frame.
+func (self *rewriteCondition) String() string {
+	var str []byte = make([]byte, 0, 32)
+
+	var index int
+	switch self.data[index] >> 5 {
+	case 0b000: // OR group
+		numTerms := self.data[index] & 0b0001_1111
+		if numTerms < 2 { panic(invalidInternalState) }
+		index += 1
+		for i := uint8(0); i < numTerms; i++ {
+			index, str = self.appendSubTerm(index, str)
+			if i != numTerms - 1 {
+				str = append(str, []byte{' ', 'O', 'R', ' '}...)
+			}
+		}
+	case 0b001: // AND group
+		numTerms := self.data[index] & 0b0001_1111
+		if numTerms < 2 { panic(invalidInternalState) }
+		index += 1
+		for i := uint8(0); i < numTerms; i++ {
+			index, str = self.appendSubTerm(index, str)
+			if i != numTerms - 1 {
+				str = append(str, []byte{' ', 'A', 'N', 'D', ' '}...)
+			}
+		}
+	default:
+		index, str = self.appendSubTerm(index, str)
 	}
 	
-	self.codePointModes[index] = mode
-	self.codePointMainIndices[index] = 0 // clear
-	if len(self.codePointModeIndices[index]) != 0 {
+	if index != len(self.data) { panic(invalidInternalState) }
+	return unsafe.String(&str[0], len(str))
+}
+
+// Returns the next index (can be at most len(self.data)),
+// and the str with the new term appended.
+func (self *rewriteCondition) appendSubTerm(index int, str []byte) (int, []byte) {
+	if index >= len(self.data) { panic(invalidInternalState) }
+
+	switch self.data[index] >> 5 {
+	case 0b000: // OR group
+		numTerms := self.data[index] & 0b0001_1111
+		if numTerms < 2 { panic(invalidInternalState) }
+		index += 1
+		str = append(str, '(')
+		for i := uint8(0); i < numTerms; i++ {
+			index, str = self.appendSubTerm(index, str)
+			if i == numTerms - 1 {
+				str = append(str, ')')
+			} else {
+				str = append(str, []byte{' ', 'O', 'R', ' '}...)
+			}
+		}
+	case 0b001: // AND group
+		numTerms := self.data[index] & 0b0001_1111
+		if numTerms < 2 { panic(invalidInternalState) }
+		index += 1
+		str = append(str, '(')
+		for i := uint8(0); i < numTerms; i++ {
+			index, str = self.appendSubTerm(index, str)
+			if i == numTerms - 1 {
+				str = append(str, ')')
+			} else {
+				str = append(str, []byte{' ', 'A', 'N', 'D', ' '}...)
+			}
+		}
+	case 0b010: // comparison
+		// append first operand (setting)
+		str = append(str, '#')
+		str = internal.AppendByteDigits(self.data[index + 1], str)
+
+		// append comparison operator
+		str = append(str, ' ')
+		switch self.data[index] & 0b0000_1111 {
+		case 0b000: str = append(str, '=', '=')
+		case 0b001: str = append(str, '!', '=')
+		case 0b010: str = append(str, '<')
+		case 0b011: str = append(str, '>')
+		case 0b100: str = append(str, '<', '=')
+		case 0b101: str = append(str, '>', '=')	
+		default:
+			panic(invalidInternalState)
+		}
+		str = append(str, ' ')
+
+		// append second operand
+		if (self.data[index] & 0b0001_0000) == 0 { // second operand is a setting too
+			str = append(str, '#')	
+		}
+		str = internal.AppendByteDigits(self.data[index + 2], str)
+
+		// advance index
+		index += 3
+	case 0b011: // quick 'setting == const'
+		str = append(str, '#')
+		str = internal.AppendByteDigits(self.data[index + 1], str)
+		str = append(str, ' ', '=', '=', ' ')
+		str = internal.AppendByteDigits(self.data[index] & 0b0001_1111, str)
+		index += 2
+	case 0b100: // quick 'setting != const'
+		str = append(str, '#')
+		str = internal.AppendByteDigits(self.data[index + 1], str)
+		str = append(str, ' ', '!', '=', ' ')
+		str = internal.AppendByteDigits(self.data[index] & 0b0001_1111, str)
+		index += 2
+	case 0b101: // quick 'setting < const'
+		str = append(str, '#')
+		str = internal.AppendByteDigits(self.data[index + 1], str)
+		str = append(str, ' ', '<', ' ')
+		str = internal.AppendByteDigits(self.data[index] & 0b0001_1111, str)
+		index += 2
+	case 0b110: // quick 'setting > const'
+		str = append(str, '#')
+		str = internal.AppendByteDigits(self.data[index + 1], str)
+		str = append(str, ' ', '>', ' ')
+		str = internal.AppendByteDigits(self.data[index] & 0b0001_1111, str)
+		index += 2
+	default:
 		panic(invalidInternalState)
 	}
-	for _, modeGlyphUID := range modeGlyphUIDs {
-		self.codePointModeIndices[index] = append(self.codePointModeIndices[index], modeGlyphUID)
-		self.numCodePointModeIndices += 1
-	}
-
-	return nil
-}
-
-var fastMapTableConditionRegexp = regexp.MustCompile(
-	`(VAR\[\d+\]|RAND\(\d+\)|\d+) ?(==|!=|<|<=) ?(VAR\[\d+\]|RAND\(\d+\)|\d+)`,
-)
-
-// Uses a very similar condition format as mapmode.Compile():
-//  - (VAR[ID] | RAND(VALUE) | {CONST}) (==/!=/</<=) (VAR[ID] | RAND(VALUE) | {CONST})
-// 
-// Some examples:
-//   _ = table.SetCondition("0 == 0") // always true, this is the default condition
-//   _ = table.SetCondition("VAR[2] == 1")
-//   _ = table.SetCondition("RAND(100) < 66")
-//   _ = table.SetCondition("VAR[0] != RAND(1)")
-//
-// Notice that ids, values and constants must be non-negative values not exceeding 255.
-func (self *FastMappingTable) SetCondition(condition string) error {
-	panic("unimplemented")
-}
-
-// Returns the current condition as a string. This method computes and allocates a
-// new string each time it's called, so make sure to cache the result if necessary.
-func (self *FastMappingTable) GetCondition() string {
-	panic("unimplemented")
-}
-
-// Both start and end are included.
-func (self *FastMappingTable) SetRange(start, end rune) error {
-	// trivial case
-	if start == self.startCodePoint && end == self.endCodePoint { return nil }
-
-	// range validation
-	err := self.validateRange(start, end)
-	if err != nil { return err }
-	newSize := int((end + 1) - start)
 	
-	// check that new start doesn't overlap existing data
-	if start > self.startCodePoint {
-		for i := self.startCodePoint; i < min(self.endCodePoint, start); i++ {
-			if self.codePointModes[i] != 0 {
-				return errors.New("can't modify mapping range: rune '" + string(i) + "' is using a custom mode")
-			}
-			if self.codePointMainIndices[i] != 0 {
-				return errors.New("can't modify mapping range: rune '" + string(i) + "' is already assigned")
-			}
-		}
+	return index, str
+}
+
+// grammar:
+// EXPR: (EXPR)
+// EXPR: TERM
+// EXPR: {INNER_EXPR OR}+ INNER_EXPR
+// EXPR: {INNER_EXPR AND}+ INNER_EXPR
+// TERM: #N {==|!=|<|>|<=|>=} #M
+// TERM: #N {==|!=|<|>|<=|>=} M
+// INNER_EXPR: TERM
+// INNER_EXPR: (EXPR)
+
+func compileRewriteCondition(definition string) (rewriteCondition, error) {
+	var condition rewriteCondition
+	if len(definition) > 1024 { return condition, errors.New("definitions limited to 1024 ascii characters max") }
+	start, end := trimSpaces(definition, 0, len(definition) - 1)
+	if end < start {
+		return condition, errors.New("invalid empty definition")
 	}
 
-	// check that new end doesn't overlap existing data
-	if end < self.endCodePoint {
-		for i := max(self.startCodePoint, end); i < self.endCodePoint; i++ {
-			if self.codePointModes[i] != 0 {
-				return errors.New("can't modify mapping range: rune '" + string(i) + "' is using a custom mode")
-			}
-			if self.codePointMainIndices[i] != 0 {
-				return errors.New("can't modify mapping range: rune '" + string(i) + "' is already assigned")
-			}
-		}
+	var err error
+	start, end, err = condition.appendNextExpr(definition, start, end, false)
+	if err != nil { return condition, err }
+	if start < end + 1 {
+		return condition, errors.New("definition expected to end after '" + definition[0 : start] + "', but it continues")
 	}
-
-	// ensure that we have enough capacity on the slices
-	indexingShift := int(start - self.startCodePoint)
-	tableLen := self.tableLen()
-	if newSize > tableLen {
-		internal.GrowSliceByN(self.codePointMainIndices, newSize - tableLen)
-		internal.GrowSliceByN(self.codePointModeIndices, newSize - tableLen)
-		internal.GrowSliceByN(self.codePointModes, newSize - tableLen)
-	}
-	
-	if indexingShift > 0 { // moving range right (data is moved left)
-		// notice: you kinda have to draw this to understand it
-		relevantLen := min(tableLen, newSize) - indexingShift
-		if relevantLen > 0 {
-			// TODO: code point modes should be adapted too, no?
-			copy(
-				self.codePointMainIndices[ : relevantLen],
-				self.codePointMainIndices[indexingShift : indexingShift + relevantLen],
-			)
-			for i := relevantLen; i < newSize; i++ {
-				self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
-			}
-			copy(
-				self.codePointModeIndices[ : relevantLen],
-				self.codePointModeIndices[indexingShift : indexingShift + relevantLen],
-			)
-			copy(
-				self.codePointModes[ : relevantLen],
-				self.codePointModes[indexingShift : indexingShift + relevantLen],
-			)
-		}
-		
-	} else if indexingShift < 0 { // moving range left (data is moved right)
-		relevantLen := min(tableLen, newSize) + indexingShift
-		if relevantLen > 0 {
-			copy(
-				self.codePointMainIndices[-indexingShift : -indexingShift + relevantLen],
-				self.codePointMainIndices[ : relevantLen],
-			)
-			for i := 0; i < -indexingShift; i++ {
-				self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
-			}
-			copy(
-				self.codePointModeIndices[-indexingShift : -indexingShift + relevantLen],
-				self.codePointModeIndices[ : relevantLen],
-			)
-			copy(
-				self.codePointModes[-indexingShift : -indexingShift + relevantLen],
-				self.codePointModes[ : relevantLen],
-			)
-		}
-	} else { // this can happen if we are only extending the end point
-		for i := tableLen; i < newSize; i++ {
-			self.codePointMainIndices[i] = uint64(ggfnt.GlyphMissing)
-		}
-		
-	}
-	self.startCodePoint, self.endCodePoint = start, end
-
-	// remove unused space
-	if newSize < tableLen {
-		self.codePointMainIndices = self.codePointMainIndices[ : newSize]
-		self.codePointModeIndices = self.codePointModeIndices[ : newSize]
-		self.codePointModes = self.codePointModes[ : newSize]
-	}
-
-	// some final sanity checks
-	if len(self.codePointMainIndices) != newSize || len(self.codePointModeIndices) != newSize || len(self.codePointModes) != newSize {
+	if start != end + 1 {
 		panic("broken code")
 	}
-
-	return nil
+	
+	return condition, nil
 }
 
-func (self *FastMappingTable) tableLen() int {
-	return (int(self.endCodePoint) + 1) - int(self.startCodePoint)
-}
-
-func (self *FastMappingTable) appendTo(data []byte, glyphIndexLookup map[uint64]uint16) ([]byte, error) {
-	data = append(data, self.condition[0 : 3]...)
-	if self.endCodePoint < self.startCodePoint { panic(invalidInternalState) }
-	data = internal.AppendUint32LE(data, uint32(self.startCodePoint))
-	data = internal.AppendUint32LE(data, uint32(self.endCodePoint))
-	tableLen := self.tableLen()
-	if tableLen > internal.MaxFastMappingTableCodePoints { panic(invalidInternalState) }
-
-	if len(self.codePointModes) != tableLen { panic(invalidInternalState) }
-	data = append(data, self.codePointModes...) // CodePointModes
-	if len(self.codePointMainIndices) != tableLen { panic(invalidInternalState) }
-	mainIndicesOffset := len(data)
-	for i, uid := range self.codePointMainIndices { // CodePointMainIndices
-		// note: some additional checks could be done here, but it gets messy quick
-		if self.codePointModes[i] == 255 {
-			if uid == uint64(ggfnt.GlyphMissing) {
-				data = internal.AppendUint16LE(data, uint16(ggfnt.GlyphMissing))
-			} else {
-				glyphIndex, found := glyphIndexLookup[uid]
-				if !found { panic(invalidInternalState) }
-				data = internal.AppendUint16LE(data, glyphIndex)
+func (self *rewriteCondition) appendNextExpr(definition string, start, end int, inner bool) (int, int, error) {
+	start, end = trimSpaces(definition, start, end)
+	if end < start {
+		return start, end, errors.New("expected expression after '" + definition[: start] + "'")
+	}
+	if end + 1 > len(definition) { panic("broken code") }
+	
+	var err error
+	if inner {
+		if definition[start] == '(' {
+			start, end, err = self.appendNextExpr(definition, start, end, false)
+			if err != nil { return start, end, err }
+			start, end = trimSpaces(definition, start, end)
+			if end >= len(definition) || definition[end] != ')' {
+				return start, end, errors.New("expected closing parenthesis after '" + definition[ : end] + "'")
 			}
+			return start, end, nil
 		} else {
-			data = append(data, 0, 0)
+			return self.appendNextTerm(definition, start, end)
+		}
+	} else { // outer
+		if definition[start] == '(' {
+			start, end, err = self.appendNextExpr(definition, start, end, false)
+			if err != nil { return start, end, err }
+			start, end = trimSpaces(definition, start, end)
+			if end >= len(definition) || definition[end] != ')' {
+				return start, end, errors.New("expected closing parenthesis after '" + definition[ : end] + "'")
+			}
+			return start, end, nil
+		} else if definition[start] == '#' {
+			return self.appendNextTerm(definition, start, end)
+		} else {
+			start, end, err = self.appendNextExpr(definition, start, end, true) // inner expression
+			if err != nil { return start, end, err }
+			if startsWith(definition, start, end, "OR ") {
+				index := len(self.data)
+				self.data = append(self.data, 0)
+				orCount := 2
+				start += 3
+				for {
+					start, end, err = self.appendNextExpr(definition, start + 3, end, true)
+					if err != nil { return start, end, err }
+					if !startsWith(definition, start, end, "OR ") { break }
+					start += 3
+					orCount += 1
+				}
+				if orCount >= 32 { return start, end, errors.New("OR chain can't have more than 31 terms") }
+				self.data[index] = uint8(orCount)
+				return start, end, nil
+			} else if startsWith(definition, start, end, "AND ") {
+				index := len(self.data)
+				self.data = append(self.data, 0)
+				andCount := 2
+				start += 4
+				for {
+					start, end, err = self.appendNextExpr(definition, start, end, true)
+					if err != nil { return start, end, err }
+					if !startsWith(definition, start, end, "AND ") { break }
+					start += 4
+					andCount += 1
+				}
+				if andCount >= 32 { return start, end, errors.New("AND chain can't have more than 31 terms") }
+				self.data[index] = 0b0010_0000 | uint8(andCount)
+				return start, end, nil
+			} else {
+				if end == start { return start, end, nil }
+				// TODO: error message not great here, it should mention parens when relevant and more
+				return start, end, errors.New("expected AND, OR or expression end after '" + definition[ : start] + "'")
+			}
+		}
+	}
+}
+
+var termRegexp = regexp.MustCompile(`^#([0-9]+) *(==|!=|<|>|<=|>=) *(#?)([0-9]+)`)
+func (self *rewriteCondition) appendNextTerm(definition string, start, end int) (int, int, error) {
+	matches := termRegexp.FindStringSubmatch(definition[start : end + 1])
+	if matches == nil {
+		return start, end, errors.New("invalid setting comparison (e.g. \"#3 != 0\", \"#0 > #1\", \"#0 == 42\", etc) after '" + definition[ : start] + "'")
+	}
+
+	leftOpSettingIndex, err := strconv.Atoi(matches[1])
+	if err != nil { panic("broken code") } // guaranteed by regexp
+	if leftOpSettingIndex > 254 {
+		return start, end, errors.New("setting '" + matches[1] + "' out of range")
+	}
+	operator := matches[2]
+	rightOpIsSetting := (matches[3] == "#")
+	rightOpValue, err := strconv.Atoi(matches[4])
+	if err != nil { panic("broken code") } // guaranteed by regexp
+	if rightOpValue > 254 {
+		if rightOpIsSetting {
+			return start, end, errors.New("setting '" + matches[4] + "' out of range")
+		} else if rightOpValue > 255 {
+			return start, end, errors.New("constant '" + matches[4] + "' out of range")
 		}
 	}
 
-	var offset uint16
-	for i, _ := range self.codePointMainIndices {
-		if self.codePointModes[i] == 255 {
-			if len(self.codePointModeIndices[i]) != 0 { panic(invalidInternalState) }
-			continue
+	if !rightOpIsSetting && rightOpValue < 32 && operator != "<=" && operator != ">=" {
+		var ctrlCode byte
+		switch operator {
+		case "==": ctrlCode = 0b0110_0000
+		case "!=": ctrlCode = 0b1000_0000
+		case  "<": ctrlCode = 0b1010_0000
+		case  ">": ctrlCode = 0b1100_0000
+		default:
+			panic("broken code")
 		}
-		
-		if len(self.codePointModeIndices[i]) > internal.MaxGlyphsPerCodePoint {
-			panic(invalidInternalState)
-		}
-		if len(self.codePointModeIndices[i]) < 2 {
-			cp := string((self.startCodePoint + rune(i)))
-			return nil, errors.New("code point \"" + cp + "\" must have at least two indices for its mapping mode")
+		self.data = append(self.data, ctrlCode | uint8(rightOpValue), uint8(leftOpSettingIndex))
+	} else {
+		var opCode byte
+		switch operator {
+		case "==": opCode = 0b000
+		case "!=": opCode = 0b001
+		case  "<": opCode = 0b010
+		case  ">": opCode = 0b011
+		case "<=": opCode = 0b100
+		case ">=": opCode = 0b101
+		default:
+			panic("broken code")
 		}
 
-		// append indices to data
-		for _, uid := range self.codePointModeIndices[i] {
-			glyphIndex, found := glyphIndexLookup[uid]
-			if !found { panic(invalidInternalState) }
-			data = internal.AppendUint16LE(data, glyphIndex)
+		if rightOpIsSetting {
+			self.data = append(self.data, 0b0100_0000 | opCode, uint8(leftOpSettingIndex))
+		} else {
+			self.data = append(self.data, 0b0101_0000 | opCode, uint8(leftOpSettingIndex))
 		}
-
-		// set CodePointMainIndices retroactively
-		offset += uint16(len(self.codePointModeIndices[i])) // TODO: am I sure this can't overflow?
-		retroIndex := mainIndicesOffset + i*2
-		internal.EncodeUint16LE(data[retroIndex : retroIndex + 2], offset)
 	}
 
-	return data, nil
+	return start + len(matches[0]), end, nil
+}
+
+func startsWith(definition string, start, end int, expr string) bool {
+	if start < 0 || end + 1 > len(definition) { panic("broken code usage") }
+	if len(expr) > (end + 1 - start) { return false }
+	for i := 0; i < len(expr); i++ {
+		if definition[start + i] != expr[i] { return false }
+	}
+	return true
+}
+
+// end is inclusive
+func trimSpaces(definition string, start, end int) (int, int) {
+	var changed bool = true
+	for start <= end && changed {
+		changed = false
+
+		// trim spaces
+		for start <= end && definition[start] == ' ' {
+			start += 1
+			changed = true
+		}
+		for end >= 0 && definition[end] == ' ' {
+			end -= 1
+			changed = true
+		}
+	}
+
+	return start, end
 }

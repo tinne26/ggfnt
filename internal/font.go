@@ -6,14 +6,18 @@ type Font struct {
 	// offsets to specific points at which critical data appears
 	// (offsetToHeader is always zero)
 	OffsetToMetrics uint32
-	OffsetToGlyphNames uint32
-	OffsetToGlyphMasks uint32
 	OffsetToColorSections uint32
 	OffsetToColorSectionNames uint32
-	OffsetToVariables uint32
-	OffsetToMappingModes uint32
-	OffsetsToFastMapTables []uint32
-	OffsetToMainMappings uint32 // part of mappings table
+	OffsetToGlyphNames uint32
+	OffsetToGlyphMasks uint32
+	OffsetToWords uint32
+	OffsetToSettingNames uint32
+	OffsetToSettingDefinitions uint32
+	OffsetToMappingSwitches uint32
+	OffsetToMapping uint32
+	OffsetToRewriteConditions uint32
+	OffsetToGlyphRewrites uint32
+	OffsetToUtf8Rewrites uint32
 	OffsetToHorzKernings uint32
 	OffsetToVertKernings uint32
 }

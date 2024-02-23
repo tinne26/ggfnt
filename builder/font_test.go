@@ -132,27 +132,41 @@ func TestBasicFontBuild(t *testing.T) {
 	if reFont.OffsetToMetrics != font.OffsetToMetrics {
 		t.Fatalf("after exporting and re-parsing, offset to metrics is %d (expected %d)", reFont.OffsetToMetrics, font.OffsetToMetrics)
 	}
-	if reFont.OffsetToGlyphNames != font.OffsetToGlyphNames {
-		t.Fatalf("after exporting and re-parsing, offset to glyph names is %d (expected %d)", reFont.OffsetToGlyphNames, font.OffsetToGlyphNames)
-	}
-	if reFont.OffsetToGlyphMasks != font.OffsetToGlyphMasks {
-		t.Fatalf("after exporting and re-parsing, offset to glyph masks is %d (expected %d)", reFont.OffsetToGlyphMasks, font.OffsetToGlyphMasks)
-	}
 	if reFont.OffsetToColorSections != font.OffsetToColorSections {
 		t.Fatalf("after exporting and re-parsing, offset to color sections is %d (expected %d)", reFont.OffsetToColorSections, font.OffsetToColorSections)
 	}
 	if reFont.OffsetToColorSectionNames != font.OffsetToColorSectionNames {
 		t.Fatalf("after exporting and re-parsing, offset to color section names is %d (expected %d)", reFont.OffsetToColorSectionNames, font.OffsetToColorSectionNames)
 	}
-	if reFont.OffsetToVariables != font.OffsetToVariables {
-		t.Fatalf("after exporting and re-parsing, offset to variables is %d (expected %d)", reFont.OffsetToVariables, font.OffsetToVariables)
+	if reFont.OffsetToGlyphNames != font.OffsetToGlyphNames {
+		t.Fatalf("after exporting and re-parsing, offset to glyph names is %d (expected %d)", reFont.OffsetToGlyphNames, font.OffsetToGlyphNames)
 	}
-	if reFont.OffsetToMappingModes != font.OffsetToMappingModes {
-		t.Fatalf("after exporting and re-parsing, offset to mapping modes is %d (expected %d)", reFont.OffsetToMappingModes, font.OffsetToMappingModes)
+	if reFont.OffsetToGlyphMasks != font.OffsetToGlyphMasks {
+		t.Fatalf("after exporting and re-parsing, offset to glyph masks is %d (expected %d)", reFont.OffsetToGlyphMasks, font.OffsetToGlyphMasks)
 	}
-	// TODO: offsetsToFastMapTables (iter)
-	if reFont.OffsetToMainMappings != font.OffsetToMainMappings {
-		t.Fatalf("after exporting and re-parsing, offset to main mappings is %d (expected %d)", reFont.OffsetToMainMappings, font.OffsetToMainMappings)
+	if reFont.OffsetToWords != font.OffsetToWords {
+		t.Fatalf("after exporting and re-parsing, offset to words is %d (expected %d)", reFont.OffsetToWords, font.OffsetToWords)
+	}
+	if reFont.OffsetToSettingNames != font.OffsetToSettingNames {
+		t.Fatalf("after exporting and re-parsing, offset to setting names is %d (expected %d)", reFont.OffsetToSettingNames, font.OffsetToSettingNames)
+	}
+	if reFont.OffsetToSettingDefinitions != font.OffsetToSettingDefinitions {
+		t.Fatalf("after exporting and re-parsing, offset to setting definitions is %d (expected %d)", reFont.OffsetToSettingDefinitions, font.OffsetToSettingDefinitions)
+	}
+	if reFont.OffsetToMappingSwitches != font.OffsetToMappingSwitches {
+		t.Fatalf("after exporting and re-parsing, offset to mapping switches is %d (expected %d)", reFont.OffsetToMappingSwitches, font.OffsetToMappingSwitches)
+	}
+	if reFont.OffsetToMapping != font.OffsetToMapping {
+		t.Fatalf("after exporting and re-parsing, offset to mappings is %d (expected %d)", reFont.OffsetToMapping, font.OffsetToMapping)
+	}
+	if reFont.OffsetToRewriteConditions != font.OffsetToRewriteConditions {
+		t.Fatalf("after exporting and re-parsing, offset to rewrite conditions is %d (expected %d)", reFont.OffsetToRewriteConditions, font.OffsetToRewriteConditions)
+	}
+	if reFont.OffsetToGlyphRewrites != font.OffsetToGlyphRewrites {
+		t.Fatalf("after exporting and re-parsing, offset to glyph rewrites is %d (expected %d)", reFont.OffsetToGlyphRewrites, font.OffsetToGlyphRewrites)
+	}
+	if reFont.OffsetToUtf8Rewrites != font.OffsetToUtf8Rewrites {
+		t.Fatalf("after exporting and re-parsing, offset to UTF8 rewrites is %d (expected %d)", reFont.OffsetToUtf8Rewrites, font.OffsetToUtf8Rewrites)
 	}
 	if reFont.OffsetToHorzKernings != font.OffsetToHorzKernings {
 		t.Fatalf("after exporting and re-parsing, offset to horz kernings is %d (expected %d)", reFont.OffsetToHorzKernings, font.OffsetToHorzKernings)

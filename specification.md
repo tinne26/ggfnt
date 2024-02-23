@@ -6,7 +6,7 @@ This is a bitmap font format created for indie game development and pixel art ga
 
 Font files use the `.ggfnt` file extension.
 
-File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory. 
+File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`, or `bouncy-8d4.ggfnt`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory.
 
 Maximum font file size is limited to 32MiB per spec, which is much more than enough for practical purposes and eliminates a whole class of problems during parsing, storage and others.
 
@@ -15,14 +15,14 @@ The binary format is designed to be reasonably compact, have safe limits and kee
 ## Main limitations
 
 - Max font file size is 32MiB.
+- Max glyph advance is 255.
 - Max number of glyphs is 56789. Some space is reserved for additional "control glyph indices".
 - Glyph composition is not supported (creating a single glyph from the combination of other glyphs).
-- FSMs section hasn't been designed yet. This would enable complex script shaping assistance and ligatures, which I personally consider fairly important features (even if advanced and not critical for most users of this format).
 
 ## Data types
 
 Data in the spec can be described using the following types:
-- `uint8`, `uint16`, `uint32`, `uint64`: little-endian encoded, taking 1, 2, 4 and 8 bytes respectively.
+- `uint8`, `uint16`, `uint24`, `uint32`, `uint64`: little-endian encoded, taking 1, 2, 3, 4 and 8 bytes respectively.
 - `int8`, `int16`, `int32`, `int64`: little-endian encoded, taking 1, 2, 4 and 8 bytes respectively.
 - `nzuint8`, `nzint8`: non-zero `uint8` and `int8`. For `nzuint8`, we take the `uint8` value + 1. For `nzint8`, negative values are the same as `int8` and non-negative values are +1.
 - `bool`: single byte, must be 0 (false) or 1 (true).
@@ -32,7 +32,7 @@ Data in the spec can be described using the following types:
 - `slice`: an `uint16` indicating the number of elements in the slice, followed by the list contents.
 - `array`: a slice with an implicit length given by some other value already present in the font data. In other words: a slice without the initial size indication.
 - `date`: a triplet of (uint16, uint8, uint8) (year, month, day). Zero can be used as undefined, but year can only be zero if month and day are also zero, and month can only be zero if day is also zero. In other words: providing a day without a month or a month without a year is invalid.
-- `blob`: a data blob of variably-sized elements, indexed by a separate slice.
+- `blob`: a data blob of variably-sized elements, usually indexed by a separate slice.
 
 Misc.:
 - basic-name-regexp: `[a-zA-Z](-?[A-Za-z0-9]+)*`, used in a couple places. The natural description of the regexp is the following: name uses only ascii, starts with a letter, and might use hyphens as separators. There's also an additional size limit of max 32 characters.
@@ -41,6 +41,8 @@ Misc.:
 
 All data sections are defined consecutively and they are all non-skippable.
 
+Many data blobs are indexed with "EndOffset" arrays. The first element then would be defined in `blob[0 : EndOffset[0]]`. The second element would be defined in `blob[EndOffset[0] : EndOffset[1]]`, and so on. The length of the data blob is `EndOffset[NumElements]`.
+
 ## Signature
 
 6 bytes:
@@ -48,7 +50,7 @@ All data sections are defined consecutively and they are all non-skippable.
 [6]byte{'t', 'g', 'g', 'f', 'n', 't'}
 ```
 
-After the signature, all data is gzipped. The 32MiB size limit applies to the *uncompressed font data*.
+After the signature, all data is gzipped. The 32MiB size limit applies to both the compressed and uncompressed font data. In any realistic scenario, if the already compressed font data exceeds 32MiB, the uncompressed version will exceed that by even a much wider margin.
 
 ### Header
 
@@ -69,72 +71,88 @@ About string // other info about the font, may have length 0. <255 chars recomme
 
 Everything should be fairly self-explanatory. Family is for related groups of fonts or font faces, like bold and italic versions, sans/serif variants and so on. Therefore, names would be "Swaggy Sans", "Swaggy Serif" and "Swaggy Bold", and the family would be only "Swaggy". In most cases, the name and family name will be the same.
 
-For major and minor versions, any incompatible change (removing glyphs or tags, changing their meaning, etc) should happen on major versions only, with the only exception of version 0, which is considered alpha/unstable.
+Regarding major and minor versions, any incompatible change (removing glyphs or tags, changing their meaning, etc) should happen only on major versions. Version 0 is an exception which should always be considered alpha/unstable.
 
 ### Metrics
 
 ```Golang
 NumGlyphs uint16 // max is 56789, then 3211 reserved for control codes, then 5530 for custom glyphs
-HasVertLayout bool // 0 for no vert layout, 1 for yes // TODO: maybe 2 for yes with mono height?
+HasVertLayout bool // if a font has a vert layout, it will have to indicate how to place glyphs vertically
 MonoWidth uint8 // set to 0 if the font is not monospaced
 
-Ascent uint8 // font ascent without accounting for diacritics. can't be zero.
-ExtraAscent uint8 // extra ascent for diacritics, if any required. must be < Ascent
-Descent uint8 // font descent without accounting for diacritics.
-ExtraDescent uint8 // extra descent for diacritics, if any is required
+Ascent uint8 // font ascent without accounting for diacritics or decorations. can't be zero.
+ExtraAscent uint8 // extra ascent for diacritics or decorations, if any required. must be < Ascent
+Descent uint8 // font descent without accounting for diacritics or decorations.
+ExtraDescent uint8 // extra descent for diacritics or decorations, if any is required
 LowercaseAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
 HorzInterspacing uint8 // default horz spacing between glyphs. typically one or zero
-VertInterspacing uint8 // if no VertLayout, just leave to 0
+VertInterspacing uint8 // must be zero if HasVertLayout is false
 LineGap uint8 // suggested line gap for the font
-VertLineWidth uint8 // must be zero if no VertLayout is used
-VertLineGap uint8 // must be zero if no VertLayout is used
+VertLineWidth uint8 // must be zero if HasVertLayout is false
+VertLineGap uint8 // must be zero if HasVertLayout is false
 ```
 
-NumGlyphs includes only the number of glyphs with actual graphical data (no control glyph indices).
+`NumGlyphs` includes only the number of glyphs with actual graphical data (no control glyph indices).
 
 MonoWidth must be allowed to be 0 even if in practice all glyphs have the same width, as this field also expresses intent and future compatibility. If 1, the parser might check that the monospaced width is respected.
 
 Regarding the glyph range, this font format has multiple areas for control glyph indices:
 - 56789 - 56899 (inclusive): predefined control codes that everyone must understand. The currently defined control indices are the following:
-	- 56789: missing glyph. Used when a unicode code point doesn't have a corresponding glyph in the font. Notice that this is not the same as the "notdef" glyph. It's recommended that a font has a "notdef" named glyph, but it's up to the programmer and renderer code to replace 56789 with notdef or panic or return an error or replace with something else.
-	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace mising glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning, and not running this through FSMs.
-	- 56791: the text start glyph. This can be useful on FSMs.
-	- 56792: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
-	- 56793: the tab glyph. Tab configuration should happen at the renderer level, typically replaced by the advance of four spaces.
-	- ... the rest are undefined
-- 56900 - 56999: reserved for font-specific control codes. E.g., for use in FSMs. Some of these control codes can be named (font-level customization).
+	- 56789: missing glyph. Used when a unicode code point doesn't have a corresponding glyph in the font. Notice that this is not the same as the "notdef" glyph. It's recommended that a font has a "notdef" named glyph as the very first glyph, but it's up to the programmer and renderer code to replace 56789 with notdef or panic or return an error or replace with something else.
+	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace missing glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning, and ignoring them when it comes to rewrite rules.
+	- 56791: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
+	- ... the rest is undefined. Other potential control indices (most would be implemented at the renderer level): `text-start`, useful for rewrite rules; `wrap-enabler-mark`, to signal line wrapping being possible at custom points; `rewrite-breaker`, to interrupt rewrite rules but be treated as the zilch glyph otherwise; etc.
+- 56900 - 56999: reserved for font-specific control codes. E.g., for use in rewrite rules. Some of these control codes can be named (font-level customization).
 - 57000 - 57999: reserved for renderer-specific control codes (library-level customization).
 - 58000 - 59999: reserved for user-specific control codes (application-level customization).
 
-Custom glyphs can be added at runtime in the 60k - 62k range (inclusive). The rest is undefined.
+Custom glyphs can be added at runtime with indices in the 60k - 62k range (inclusive). The rest is undefined.
 
 The font's basic size is considered to be `Ascent + Descent`. The `LineGap` must be applied between lines of this size, without also adding the extra ascents and descents. This could lead to overlaps in some extreme cases. A font without extra ascents and extra descents will be referred to as a "tightly sized" font.
 
 Having `ExtraDescent` is very uncommon among languages using the latin alphabet, as even the languages that use hooks like "ᶏ" and "ꞔ" rarely descend more than "g", "q" and other common letters. An exception is if only "capital" letters are used (e.g. "Ƒ", "Ģ" or even "Ç").
 
-The `ExtraAscent` is quite common unless the font actively "squeezes" capital letters to accommodate accents and diacritic marks like "Ä", "É", "Û" and similar. Some fonts may use a feature flag to handle this in different ways. Squeezing letters is not aesthetic and should be avoided, but on some low-res games it might be necessary. If you only want to do it for the retro feel... please seek help.
+The `ExtraAscent` is quite common unless the font actively "squeezes" capital letters to accommodate accents and diacritic marks like "Ä", "É", "Û" and similar. Some fonts may use a feature flag to make squeezing optional. Squeezing letters is not aesthetic and should be avoided, but on some low-res games it might be necessary. If you only want to do it for the retro feel... please seek help.
+
+`ExtraAscent` and `ExtraDescent` also needs to be used in some fonts with animated or decorated glyphs in order to account for the required extra space.
 
 The `LowercaseAscent` should be set to 0 when no lowercase version of the letters exist. Having unicode mappings from lowercase letters to their capitalized glyphs is discouraged; being strict is better in the font definition context. Diacritic marks on lowecase letters must not be considered for this ascent value. Finally, if lowercase letters are shaped as uppercase letters (changing only the size of lowercase and uppercase letters, known as "small-caps"), this metric still applies and must be set. This can also be done conditionally with a feature flag.
 
-If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), parsing should immediately return an error. That being said, not all verifications are cheap, so font parsers might offer options or additional methods to check the correctness of the font with different degrees of strictness.
+If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), strict parsing should immediately return an error. That being said, verifications can be expensive, so default parsing methods might omit some of these checks that are linear on the amount of font glyphs.
 
-TODO: are we sure any error should be reported? If we do glyph animations, in some cases we might break some rules, and it's not so clear that the parser should complain about it. Having explicit exceptions doesn't sound super clean, but might be better than nothing..?
+### Color
+
+The font format supports up to 255 colors, divided in two types of colors: dyes and palettes.
+
+Dyes are colors that can be configured on the renderer. Each dye can include mutiple alpha values. Almost all fonts have a `"main"` dye, typically with 255 alpha. Sometimes the main dye will include additional alpha values, like 128. In other words: a dye is an alpha scale to which we can apply a custom color.
+
+Palettes are sets of "static" colors. A renderer might allow swapping the colors in a palette, but this requires context awareness and understanding what the palette colors are being used for. Typically, they are only used for emojis and icons.
+
+```Golang
+NumDyes uint8
+NumPalettes uint8 // sum of NumDyes + NumPalettes can't exceed 255
+ColorSectionStarts [NumDyes + NumPalettes]uint8 // inclusive, can't be zero, in descending order
+ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length must be checked at parsing time
+ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
+ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
+ColorSectionNames blob[...]
+```
+
+> Note for GPU renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
 
 ### Glyphs data
 
 ```Golang
 NumNamedGlyphs uint16
 NamedGlyphIDs [NumNamedGlyphs]uint16 // references GlyphNames in order (custom control codes can be included)
-GlyphNameEndOffsets [NumNamedGlyphs]uint32 // indexes GlyphNames in order
+GlyphNameEndOffsets [NumNamedGlyphs]uint24 // indexes GlyphNames in order
 GlyphNames blob[noLenString] // in lexicographical order. names can't repeat
 
-GlyphMaskEndOffsets [NumGlyphs]uint32 // indexes GlyphMasks
+GlyphMaskEndOffsets [NumGlyphs]uint24 // indexes GlyphMasks
 GlyphMasks blob[Placement, [...]RasterOperation] // (move to, line to, etc.)
 ```
 
-Minor technical note: while using uint16 instead of uint32 for NameGlyphOffsets would almost always be reasonable, I want to avoid tricky implicit restrictions, and names themselves also tend to have much higher overhead than those extra 2 bytes per entry.
-
-Glyph names must match basic-name-regexp.
+Glyph names must match `basic-name-regexp`.
 
 The glyph placement is:
 ```Golang
@@ -163,68 +181,61 @@ Important:
 There are many ways to encode any single mask. This might not be a trivial problem to solve optimally, but that's not particularly important at the moment, and many simple solutions are enough.
 
 Named glyphs are useful to look up "unique" glyphs from within the code, like, "ico-heart-half" or others that may be relevant in your game but you can't or don't want connected to standard unicode code points. These would be mapped to a unicode private area like (U+E000, U+F8FF). Recommended standard named glyphs:
-- `notdef`: rectangle representing missing glyph.
+- `notdef`: rectangle representing missing glyph. This should also be the first glyph in the font.
 Names must conform to `basic-name-regexp`. Names aren't meant to support naming *all* glyphs in the font, only glyphs that have to be referenceable in particular due to *specific game needs* or general operation (e.g. notdef).
 
-### Color
+### Settings
 
-Actual color table:
-```Golang
-NumDyes uint8
-NumPalettes uint8 // sum of NumDyes + NumPalettes can't exceed 255
-ColorSectionStarts [NumDyes + NumPalettes]uint8 // inclusive, can't be zero, in descending order
-ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length must be checked at parsing time
-ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
-ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
-ColorSectionNames blob[...]
-```
-
-Note for renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
-
-### Variables
+Public, named font settings that can be configured from the user side.
 
 ```Golang
-NumVariables uint8
-Variables [NumVariables](uint8, uint8, uint8) // (init value, min value, max value)
+NumWords uint8 // many words are already predefined if not overridden
+WordEndOffsets [NumWords]uint16
+Words blob[noLenString] // must conform to basic-name-regexp
 
-NumNamedVars uint8
-NamedVarKeys [NumNamedVars]uint8 // references VariableNames in order
-VarNameEndOffsets [NumNamedVars]uint16 // references VariableNames in order
-VariableNames blob[noLenString] // in lexicographical order
+NumSettings uint8
+SettingNameEndOffsets [NumSettings]uint16
+SettingNames blob[noLenString]
+SettingEndOffsets [NumSettings]uint16 // references Settings
+Settings blob[...]
 ```
 
-Variable names must conform to `basic-name-regexp`. The max number of variables is 255.
+Each setting has a list of options, written as bytes referencing the available words. The value 255 is not valid.
 
-Variables are used for conditional or variable `code point -> rune` mappings and for custom FSMs. This is all explored throughout the next sections.
+Setting names must conform to `basic-name-regexp`. The max number of settings is 255.
 
-We also have some special variables that renderers might detect and adjust automatically if they are named:
-- "vert-mode-on": set to 1 when rendering in vertical mode, 0 otherwise.
-- TODO: decide if this is really a good idea. It's helpful for vert mode, but if that's the only thing, it might be better to do it manually or something. leading or first glyph could be a thing too. maybe a special variable to allow metrical transgressions, though that seems like a terrible way to go about it.
+Settings are used for conditional mappings and rewrite rules, which allow supporting stylistic glyph alternates, feature flags, animations and ligatures, among others.
 
-There are also other variables that have semi-standardized names but are not automatically adjusted:
-- "glyph-rotation": if 0, glyph rotation is determined by "vert-mode-on". If 1, glyphs are always rotated. If 2, glyphs are never rotated.
+To see the worlds already defined, check [the source code]().
 
 ### Mapping
 
 Every font needs a mapping section in order to indicate which glyph indices correspond to each unicode code point.
 
 ```Golang
-NumMappingModes uint8 // typically 0. default mode is 255. max is 254
-MappingModeRoutineEndOffsets [NumMappingModes]uint16
-MappingModeRoutines blob[[...]uint8]
-
-FastMappingTables short[]FastMappingTable // see FastMappingTable section, prioritized over the general mapping table
+NumMappingSwitches uint8
+MappingSwitchEndOffsets [NumMappingSwitches]uint16
+MappingSwitches blob[...]
 
 NumMappingEntries uint16
-CodePointList [NumMappingEntries]int32 // we do the binary search here if no fast table was relevant
-CodePointModes [NumMappingEntries]uint8
-CodePointMainIndices [NumMappingEntries]uint16 // mode == 255 ? glyphIndex : CodePointModeIndices end index (exclusive)
-CodePointModeIndices []uint16 // max 64 indices per code point
+CodePointsIndex [NumMappingEntries]int32 // we do the binary search here
+MappingEndOffsets [NumMappingEntries]uint24
+Mappings blob[...]
 ```
 
-At the most basic level, mapping can be done by assigning mode 255 to every entry, which is a special mode that indicates that a code point maps unconditionally to a single glyph index.
+Each entry of mapping data consists of a switch. The first byte is the switch type (255 if inconditional mapping is used). If any other switch type is used, we have a sequence of glyph groups with one or more glyph indices. Glyph groups are defined as follows:
+- Total group size as `uint8`. Can't be 0. Can't exceed 128.
+- If group size > 1, we have one byte indicating the group's animation characteristics:
+	- 0b0000_0001: loopable. The animation can wrap back to the start after reaching the end.
+	- 0b0000_0010: sequential. The animation should always be played sequentially from start to end or backwards.
+	- ob0000_0100: terminal. The animation represents a vanishing or destructive sequence that shouldn't be automatically rewinded or replayed.
+	- 0b0000_1000: split. The animation is composed of independent fragments that the animation can be stopped at. A split animation should never be sequential, but a non-sequential animation is not always necessarily split.
+	- 0bXXX0_0000: the animation class index. Still undefined. (TODO). Discretional use by the font creator? Maybe leave as custom class flags instead. Like UI vs Char and so on.
+- 0bXYYY_YYYY: the Y's indicate the subgroup size - 1 (zero doesn't exist). If X is 1, the subgroup is consecutive, so only the first index is indicated. Otherwise, all indices are explicitly provided. Multiple subgroups might be used to reduce memory footprint of consecutive sequences, but too many subgroups will also increase the cost of finding and operating switch cases.
 
-The remaining modes, from 0 to 254, can be customly defined to enable a variety of features:
+Switches are defined as lists of settings. Based on the amount of combinations and their possible values, we have an exhaustive switch, indexed from 0...N, where N can't be higher than 255. Implementers should cache recent code point to glyph index set results. Going through switch cases is slow, as we need to advance linearly; this is why caching is considered important in this context.
+
+Mapping to a set of glyph indices and using switches can be useful for a number of features:
 - Stylistic alternates. This can include randomized variations, dialectal glyph variations (for game flavor mostly), conditional font glyph stylizations, etc.
 - Animated glyphs. Games can often benefit from textual cursors, small input icons and other small animated elements that are part of the text. For letters themselves it's more uncommon, but falling blood, letters breaking, rotations and many others are also totally possible.
 - Feature flags:
@@ -234,117 +245,48 @@ The remaining modes, from 0 to 254, can be customly defined to enable a variety 
 	- Slashed zero.
 	- Superscript and subscript.
 
-For the custom modes, each mapping mode routine is defined byte by byte:
-- The first byte is an uint8 indicating the number of possible results. This must be at least 2.
-- The `ResultIndex` (chosen glyph among the listed choices) defaults to 0 at the start of each routine execution.
-- We get one byte indicating a command:
-	- The top 2 bits (0bXX00_0000) indicate the command type:
-		- 00 = operate: increase / decrease / set the "result" index or a variable.
-		- 01 = if/stop: a.k.a filter. Can also be used as a single byte termination (0 == 1).
-		- 10 = if/else: has two bytes of offsets (num `if` bytes, num `else` bytes)
-		- 11 = reserved for future versions (...maybe quick conditional operation?).
-	- The remaining 6 bits are the parametrization, which depends on the command type itself. This is described in more detail later.
-- After the command byte, we get zero to many bytes with the data for the command. This amount of bytes depends on the command type and its parametrization.
-- Each mode routine can have at most 228 bytes. Mode routines are evaluated each time we have to map a character, so going beyond that would result in an unacceptable level of complexity and overhead.
+### Rewrite rules
 
-> Notice: a renderer can't really cache mode results. While this would work well in some cases, in others dropping the cache would be too expensive. Random rolls also can't be cached. Animations are not caching-friendly. Trying to develop heuristics will often result in more overhead than executing the mode routine itself.
-
-Parametrization bits for `operate`:
-```
-0b0000_00XX: 00 = set, 01 = increase by one, 10 = increase, 11 = decrease
-0b0000_XX00: operand type (00 = var, 01 = const, 10 = rng, 11 = rng(NumModePossibleResults)
-0b000X_0000: result type (0 = ResultIndex, 1 = variable (ID given explicitly in data))
-0b00X0_0000: quick exit; if 1, we stop after this command
-```
-
-Parametrization bits for conditionals:
-```
-0b0000_00XX: first comparison argument (00 = var, 01 = rng, 10 = 1, 11 = ResultIndex)
-0b0000_XX00: second argument (00 = var, 01 = rng, 10 = 0, 11 = const)
-0b00XX_0000: comparison operator (00 = "==", 01 = "!=", 10 = "<", 11 = "<=")
-```
-
-Parametrization bits for quick conditional operation (prototype, undecided):
-```
-0b0000_000X: operation (0 = set, 1 = increase)
-0b0000_00X0: first comparison argument (0 = var, 1 = const)
-0b0000_XX00: second argument (00 = var, 01 = rng, 10 = 1, 11 = ResultIndex)
-0b00XX_0000: comparison operator (00 = "==", 01 = "!=", 10 = "<", 11 = "<=")
-```
-
-Notice that when `CodePointMainIndices` is indexing `CodePointModeIndices` in `mode != 255`, the offset is not in bytes like in most other tables throughout the spec, but elements (`uint16`).
-
-Misc. technical notes:
-- While glyph index overlap would be possible while indexing `CodePointModeIndices`, it leads to all kinds of unnecessary complications, so don't think about it.
-- Technically the max 64 glyphs per code point can be bypassed by making the glyph appear in one or more fast mapping tables and/or the final main mapping table. This is ok, we don't enforce a *total* max 64 glyphs per code point.
-- NumMappingEntries was initially uint32, but then I reasoned that while it's true that you can have multiple code points mapped to a single glyph (e.g. lowercase and uppercase, different ideographic symbols like triangles mapped to a single triangle glyph, etc), these would generally derive from bad practices and seem quite unrealistic. It's much more reasonable to hit other limits first.
-
-##### FastMappingTable
-
-Fast mapping tables are designed to avoid binary searches on common contiguous regions of unicode code points. The most common case is ASCII range 32 - 126. There can be some unused code points in the middle, and they should have 56789 ("missing" control index) assigned to them.
+Rewrite rules allow fonts to support ligatures, emoji codes or other user-defined special sequences.
 
 ```Golang
-TableCondition MappingTableCondition
-StartCodePoint int32 // inclusive (int32 = rune)
-EndCodePoint   int32 // exclusive (int32 = rune)
-CodePointModes [TableLength]uint8
-CodePointMainIndices [TableLength]uint16 // mode == 255 ? glyphIndex : CodePointModeIndices end index (exclusive)
-CodePointModeIndices []uint16 // max 64 indices per code point
+NumConditions uint8 // auxiliar conditions used on some rewrite rules
+ConditionEndOffsets [NumConditions]uint16
+Conditions blob[...]
+
+NumGlyphRules uint16
+GlyphRuleEndOffsets []uint24
+GlyphRules blob[...]
+NumUTF8Rules uint16
+UTF8RuleEndOffsets []uint24
+UTF8Rules blob[...]
 ```
 
-Mapping table condition:
-```Golang
-Condition     uint8 // 0b00CC_BBAA; AA and BB are: 00 = var, 01 = rng, 10 = const; CC is comparison operator
-FirstArgData  uint8
-SecondArgData uint8
-```
+Both sequences of glyph indices and code points are allowed. Each rewrite rule is defined in the following format:
+- For glyph rules: `uint8` for the condition that must be satisfied for the rewrite rule to be applicable (255 if no condition). `uint8` indicating the length of the sequence that will be replaced. `uint16` with the resulting replacement glyph index. And then as many `uint16` glyph indices as indicated earlier.
+- For code points: same as glyph rules, but with `int32`s for code points instead of `uint16`s for glyph indices.
 
-The default mapping table condition is (0b0000_1010, 0, 0), which means 0 == 0 (always true).
+Implementers should compile finite state machines to deal with rewrite rule application. TODO: provide default implementation. The format can't provide pre-compiled FSMs, as a user might want to enable or disable specific ligatures, forcing FSMs recompilations. A JIT FSM compiler would be ideal in this scenario, but that's a pain to implement.
 
-Parsers must limit the *total* fast mapping tables memory usage to 32KiB. Table lengths must also be strictly limited to less or equal than 1000. Anything above a few hundred contiguous code points tends to be suspicious anyway.
+The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time.
 
-### FSMs
-
-Prototype design, not yet included in the format:
-
-```Golang
-NumFSMs uint8
-FSMEndOffsets [NumFSMs]uint32
-FSMs blob[...]
-```
-All FSMs will be executed for each new glyph in the text, in their definition order.
-
-For each FSM:
-```Golang
-NumStates uint8
-TransitionEndOffsets []uint16
-Transitions blob[...]
-```
-
-Transitions are defined by a stream of bytes:
-- First byte indicates the target state.
-- Next byte encodes the following information:
-	- 0bX000_0000: if set, we continue jumping when reaching the target.
-	- 0b0X00_0000: if set, next bytes correspond to glyph indices, otherwise it's variables.
-	- 0b00X0_0000: if set, after this transition there's a new one that also must be true to jump (it omits the first target byte; the "continue jumping" flag must match the previous transition value).
-	- 0b000X_XXXX: encodes the number of glyph index or variable commands coming up next. Zero means inconditional jump.
-- For glyph index transitions, we have the glyph indices sorted in ascending order, so we can binary search them.
-- For variables, we have three bytes:
-	- Operator: 00 is ==, 01 is !=, 10 is <, 11 is <=. If 0b0000_0X00 is set, the second argument will also be a variable instead of a constant. If 0b0000_X000 is set, we have an AND operation. Otherwise we have an OR.
-	- First argument: variable ID.
-	- Second argument: constant or variable ID, depending on the operator.
-
-TODO: I need glyph replacement. I need a "replace last N glyphs with Y". I might need lookaheads, alternatively. This is crucial for ligatures and stuff. Maybe replacement FSMs and operation FSMs could be different? hmmm... Like, replacements sound like they could also be done with a different, simpler system.
-
-The FSM max jumping sequence length is restricted to 32 in order to avoid infinite loops.
+Conditions are defined in a binary format. The first term is always a control code indicating what follows:
+- 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2).
+- 0b001X_XXXX: `AND` condition group. The X's indicate the number of terms in the expression (can't be < 2).
+- 0b010X_YYYY: comparison. If X is 0, we compare two settings. If X is 1, we compare a setting value with a constant. YYYY indicates the operator (000 is `==`, 001 is `!=`, 010 is `<`, 011 is `>`, 100 is `<=`, `101` is `>=`). Followed by two bytes with the settings/constants afterwards.
+- 0b011X_XXXX: quick comparison operator `setting == const`. Constant is encoded in X's. Followed by one byte with the setting index.
+- 0b100X_XXXX: quick comparison `setting != const`. Constant is encoded in X's.
+- 0b101X_XXXX: quick comparison `setting < const`. Constant is encoded in X's.
+- 0b110X_XXXX: quick comparison `setting > const`. Constant is encoded in X's.
+- 0b111X_XXXX: undefined. Maybe consider adding `bool expr cmp bool expr`?
 
 ### Kernings
 
 ```Golang
-NumHorzKerningPairs uint32
+NumHorzKerningPairs uint24
 HorzKerningPairs [NumHorzKerningPairs]uint32 // for binary search (the uint32 is uint16|uint16 glyph indices)
 HorzKerningValues [NumHorzKerningPairs]int8
-NumVertKerningPairs uint32 // must be 0 if VertLayout is false
+NumVertKerningPairs uint24 // must be 0 if HasVertLayout is false
 VertKerningPairs [NumVertKerningPairs]uint32
 VertKerningValues [NumVertKerningPairs]int8
 ```
@@ -358,8 +300,6 @@ Since data is gzipped, we expect the EOF here, which will also verify the checks
 ### Edition data
 
 Edition data is stored in a separate file, the `.ggwkfnt` file. Preferently, the file name should be shared with the main font file so we can get the two easily when loading the files, but it's not strictly required. The data is gzipped right after the signature.
-
-There's also a 
 
 Signature:
 ```Golang
@@ -376,11 +316,16 @@ NumKerningClasses uint16 // classes are one-indexed
 KerningClassNames [NumKerningClasses]shortString // must conform to basic-name-regex (+ possible spaces)
 KerningClassValues [NumKerningClasses]int8
 
-NumHorzKerningPairsWithClasses uint32
+NumHorzKerningPairsWithClasses uint24
 HorzKerningPairs [NumHorzKerningPairsWithClasses](first, second uint16, class uint16)
 
-NumVertKerningPairsWithClasses uint32
+NumVertKerningPairsWithClasses uint24
 VertKerningPairs [NumVertKerningPairsWithClasses](first, second uint16, class uint16)
 
-MappingModeNames short[]shortString // must conform to basic-name-regex (+ possible spaces)
+ConditionNames short[]shortString // must conform to basic-name-regex (+ possible spaces)
 ```
+
+### Unsolved issues
+
+- Should I explicitly say in the spec that mapping different code points to the same offset is valid? Because I can imagine people still wanting to map different code points to the same thing. And it might even be reasonable in some cases.
+- End offsets are not explicitly explained anywhere, and it's not clear if the end offset is inclusive or exclusive. They must be exclusive, but I'm not sure I did it right everywhere, or that there aren't range issues somewhere.

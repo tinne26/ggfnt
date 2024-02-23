@@ -118,6 +118,13 @@ func (self *ParsingBuffer) ReadUint32() (uint32, error) {
 	return DecodeUint32LE(self.Bytes[index : ]), nil
 }
 
+func (self *ParsingBuffer) ReadUint24() (uint32, error) {
+	index := self.Index
+	err := self.readUpTo(index + 3)
+	if err != nil { return 0, err }
+	return DecodeUint24LE(self.Bytes[index : ]), nil
+}
+
 func (self *ParsingBuffer) ReadInt32() (int32, error) {
 	n, err := self.ReadUint32()
 	return int32(n), err

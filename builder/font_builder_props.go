@@ -227,76 +227,50 @@ func checkStringValidity(str string) error {
 
 // ---- mapping ----
 
-func (self *Font) AddMappingMode(definition []byte) (uint8, error) {
+func (self *Font) AddMappingSwitch(settings ...uint8) (uint8, error) {
 	panic("unimplemented")
 }
 
-func (self *Font) DeleteMappingMode(index uint8) error {
+func (self *Font) DeleteMappingSwitch(index uint8) error {
 	panic("unimplemented")
 }
 
-func (self *Font) SwapMappingModes(a, b uint8) error {
+func (self *Font) SwapMappingSwitches(a, b uint8) error {
 	panic("unimplemented")
 }
 
-func (self *Font) GetMappingMode(index uint8) {
-	// ????
+func (self *Font) GetMappingSwitchSettings(index uint8) []uint8 {
 	panic("unimplemented")
 }
 
-func (self *Font) Map(codePoint rune, glyphUID uint64) error {
+func (self *Font) Map(codePoint rune, glyphUIDs ...uint64) error {
+	// validation
 	if codePoint < ' ' {
 		return errors.New("can't map code points before ' ' (space)") 
 	}
-	_, hasData := self.glyphData[glyphUID]
-	if !hasData {
-		return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
-	}
-	self.runeMapping[codePoint] = codePointMapping{ Mode: 255, Glyphs: []uint64{ glyphUID } }
-	return nil
-}
-
-func (self *Font) MapWithMode(codePoint rune, mode uint8, modeGlyphUIDs ...uint64) error {
-	// all error checks
-	if len(modeGlyphUIDs) < 2 {
-		return errors.New("custom mode mapping requires mapping at least 2 glyphs")
-	}
-	if int(mode) >= len(self.mappingModes) {
-		return errors.New("attempted to use undefined custom mode mapping")
-	}
-	for _, modeGlyphUID := range modeGlyphUIDs {
-		_, hasData := self.glyphData[modeGlyphUID]
+	for _, glyphUID := range glyphUIDs {
+		_, hasData := self.glyphData[glyphUID]
 		if !hasData {
 			return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
 		}
 	}
-	
-	self.runeMapping[codePoint] = codePointMapping{ Mode: mode, Glyphs: modeGlyphUIDs }
+
+	// actual addition
+	// TODO: would need more validation, no more than 64 UIDs or whatever?
+	self.runeMapping[codePoint] = mappingEntry{
+		SwitchType: 255,
+		SwitchCases: []mappingGroup{ mappingGroup{ Glyphs: glyphUIDs } },
+	}
 	return nil
 }
 
-func (self *Font) NumFastMappingTables() int {
-	return len(self.fastMappingTables)
+// TODO: I also need removal, edit (modify) and get. messy.
+func (self *Font) MapWithSwitch(codePoint rune, mapSwitch uint8, glyphUIDs [][]uint64) error {
+	// self.mappingSwitches[switchIndex]
+	// self.computeNumSwitchCases(switchIndex uint8) int
+	panic("unimplemented")
 }
 
-func (self *Font) GetFastMappingTable(i int) *FastMappingTable {
-	return self.fastMappingTables[i]
-}
-
-func (self *Font) SwitchFastMappingTables(i, j int) error {
-	numTables := self.NumFastMappingTables()
-	if i < 0 || i >= numTables { return fmt.Errorf("fast mapping table #%d does not exist", i) }
-	if j < 0 || j >= numTables { return fmt.Errorf("fast mapping table #%d does not exist", j) }
-	if i == j { return nil }
-	self.fastMappingTables[i], self.fastMappingTables[j] = self.fastMappingTables[j], self.fastMappingTables[i]
-	return nil
-}
-
-func (self *Font) AddFastMappingTable(start, end rune) error {
-	table, err := newFastMappingTable(start, end)
-	if err != nil { return err }
-	table.builder = self
-	// TODO: check for max size error?
-	self.fastMappingTables = append(self.fastMappingTables, table)
-	return nil
+func (self *Font) Unmap(codePoint rune) error {
+	panic("unimplemented")
 }

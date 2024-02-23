@@ -18,7 +18,7 @@ import "github.com/tinne26/ggfnt/internal"
 //  - Use [Font.Metrics]() to access information about the [FontMetrics].
 //  - Use [Font.Glyphs]() to access information about the [FontGlyphs].
 //  - Use [Font.Color]() to access information about the [FontColor].
-//  - Use [Font.Vars]() to access information about the [FontVariables].
+//  - Use [Font.Settings]() to access information about the [FontSettings].
 //  - Use [Font.Mapping]() to access information about the [FontMapping].
 //  - Use [Font.Kerning]() to access information about the [FontKerning].
 type Font internal.Font
@@ -60,7 +60,7 @@ func (self *Font) Validate(mode FmtValidation) error {
 	if err != nil { return err }
 	err = self.Color().Validate(mode)
 	if err != nil { return err }
-	err = self.Vars().Validate(mode)
+	err = self.Settings().Validate(mode)
 	if err != nil { return err }
 	err = self.Mapping().Validate(mode)
 	if err != nil { return err }
@@ -74,10 +74,11 @@ func (self *Font) Validate(mode FmtValidation) error {
 
 func (self *Font) Header() *FontHeader { return (*FontHeader)(self) }
 func (self *Font) Metrics() *FontMetrics { return (*FontMetrics)(self) }
-func (self *Font) Glyphs() *FontGlyphs { return (*FontGlyphs)(self) }
 func (self *Font) Color() *FontColor { return (*FontColor)(self) }
-func (self *Font) Vars() *FontVariables { return (*FontVariables)(self) }
+func (self *Font) Glyphs() *FontGlyphs { return (*FontGlyphs)(self) }
+func (self *Font) Settings() *FontSettings { return (*FontSettings)(self) }
 func (self *Font) Mapping() *FontMapping { return (*FontMapping)(self) }
+func (self *Font) Rewrites() *FontRewrites { return (*FontRewrites)(self) }
 func (self *Font) Kerning() *FontKerning { return (*FontKerning)(self) }
 
 // --- header section ---
@@ -212,35 +213,6 @@ func (self *FontMetrics) Validate(mode FmtValidation) error {
 	return nil
 }
 
-// --- glyphs section ---
-
-type FontGlyphs Font
-
-// Alias for Metrics().NumGlyphs()
-func (self *FontGlyphs) Count() uint16 {
-	return ((*Font)(self)).Metrics().NumGlyphs()
-}
-func (self *FontGlyphs) NamedCount() uint16 {
-	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphNames + 0 : self.OffsetToGlyphNames + 2])
-}
-func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
-func (self *FontGlyphs) RasterizeMask(glyph GlyphIndex) *image.Alpha { panic("unimplemented") }
-func (self *FontGlyphs) Placement(glyph GlyphIndex) GlyphPlacement { panic("unimplemented") }
-
-func (self *FontGlyphs) Validate(mode FmtValidation) error {
-	// default checks
-	if self.NamedCount() > self.Count() {
-		return errors.New("can't have more named glyphs than glyphs")
-	}
-
-	// strict checks
-	if mode == FmtStrict {
-		panic("unimplemented")
-	}
-
-	return nil
-}
-
 // --- color section ---
 
 // TODO: maybe given the importance of the "main" dye, either I change spec
@@ -300,43 +272,69 @@ func (self *FontColor) Validate(mode FmtValidation) error {
 	return nil
 }
 
-// --- variables section ---
+// --- glyphs section ---
 
-// Index to a font variable. See [FontVariables].
-type VarKey uint8
+type FontGlyphs Font
 
-// Obtained through [Font.Variables]().
-// 
-// Variables can't be modified on the [*Font] object itself, that
-// kind of state must be managed by a renderer or similar.
-type FontVariables Font
-func (self *FontVariables) Count() uint8 {
-	return self.Data[self.OffsetToVariables]
+// Alias for Metrics().NumGlyphs()
+func (self *FontGlyphs) Count() uint16 {
+	return ((*Font)(self)).Metrics().NumGlyphs()
 }
-func (self *FontVariables) NamedCount() uint8 {
-	index := self.OffsetToVariables + 1 + uint32(self.Count())*3
-	return self.Data[index]
+func (self *FontGlyphs) NamedCount() uint16 {
+	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphNames + 0 : self.OffsetToGlyphNames + 2])
 }
-func (self *FontVariables) FindKeyByName(name string) VarKey { panic("unimplemented") }
-func (self *FontVariables) GetInitValue(key VarKey) uint8 { panic("unimplemented") }
-func (self *FontVariables) GetRange(key VarKey) (minValue, maxValue uint8) { panic("unimplemented") }
-func (self *FontVariables) Each(func(key VarKey, name string)) {
-	// only named variables are exposed ?
-}
+func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
+func (self *FontGlyphs) RasterizeMask(glyph GlyphIndex) *image.Alpha { panic("unimplemented") }
+func (self *FontGlyphs) Placement(glyph GlyphIndex) GlyphPlacement { panic("unimplemented") }
 
-func (self *FontVariables) Validate(mode FmtValidation) error {
+func (self *FontGlyphs) Validate(mode FmtValidation) error {
 	// default checks
 	if self.NamedCount() > self.Count() {
-		return errors.New("can't have more named variables than variables")
+		return errors.New("can't have more named glyphs than glyphs")
 	}
+
+	// strict checks
+	if mode == FmtStrict {
+		panic("unimplemented")
+	}
+
+	return nil
+}
+
+// --- settings section ---
+
+// Index to a font setting. See [FontSettings].
+type SettingKey uint8
+
+// Obtained through [Font.Settings]().
+// 
+// Settings can't be modified on the [*Font] object itself, that
+// kind of state must be managed by a renderer or similar.
+type FontSettings Font
+func (self *FontSettings) Count() uint8 {
+	return self.Data[self.OffsetToSettingDefinitions]
+}
+//func (self *FontSettings) FindKeyByName(name string) SettingKey { panic("unimplemented") }
+//func (self *FontSettings) GetInitValue(key SettingKey) uint8 { panic("unimplemented") }
+func (self *FontSettings) GetNumOptions(key SettingKey) uint8 { panic("unimplemented") }
+func (self *FontSettings) Each(func(key SettingKey, name string)) {
+	panic("unimplemented")
+}
+func (self *FontSettings) EachOption(key SettingKey, each func(optionIndex uint8, optionName string)) {
+	panic("unimplemented")
+}
+
+func (self *FontSettings) Validate(mode FmtValidation) error {
+	// default checks
+	// ...
 
 	// strict checks
 	if mode == FmtStrict {
 		// TODO:
 		// - go through var defs and ensure init value is in range
-		// - make sure every named variable is not repeated and is within numVars
-		// - make sure every named variable name is correct
-		// - make sure every named variable name comes in order
+		// - make sure every setting is not repeated and is within numVars
+		// - make sure every setting name is correct
+		// - make sure every setting name comes in order? nah.
 		// - make sure the offsets to names are correct
 		panic("unimplemented")
 	}
@@ -347,6 +345,12 @@ func (self *FontVariables) Validate(mode FmtValidation) error {
 // --- mapping section ---
 
 type FontMapping Font
+
+// More than this might be needed for more complex switch caches, but
+// it might not even be relevant, maybe the default cache is ok, without
+// any interface at all.
+func (self *FontMapping) NumSwitchTypes() uint8 { panic("unimplemented") }
+
 func (self *FontMapping) NumCodePoints() uint32 { panic("unimplemented") }
 func (self *FontMapping) Utf8(codePoint rune) GlyphIndex { panic("unimplemented") }
 func (self *FontMapping) Ascii(codePoint byte) GlyphIndex { panic("unimplemented") }
@@ -354,11 +358,48 @@ func (self *FontMapping) Ascii(codePoint byte) GlyphIndex { panic("unimplemented
 func (self *FontMapping) Validate(mode FmtValidation) error {
 	// default checks
 	// ...
-	// TODO: check fast table ranges and conditions?
 
 	// strict checks
 	if mode == FmtStrict {
 		// TODO: 
+		panic("unimplemented")
+	}
+
+	return nil
+}
+
+// --- rewrite rules section ---
+
+type FontRewrites Font
+func (self *FontRewrites) NumGlyphRules() uint16 { panic("unimplemented") }
+func (self *FontRewrites) NumUTF8Rules() uint16 { panic("unimplemented") }
+
+type GlyphRewriteRule struct { data []uint8 }
+func (self *GlyphRewriteRule) Condition() (uint8, bool) { panic("unimplemented") }
+func (self *GlyphRewriteRule) Replacement() GlyphIndex { panic("unimplemented") }
+func (self *GlyphRewriteRule) Sequence(each func(GlyphIndex)) { panic("unimplemented") }
+func (self *GlyphRewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+
+func (self *FontRewrites) GetGlyphRule(index uint16) GlyphRewriteRule {
+	panic("unimplemented")
+}
+
+type Utf8RewriteRule struct { data []uint8 }
+func (self *Utf8RewriteRule) Condition() (uint8, bool) { panic("unimplemented") }
+func (self *Utf8RewriteRule) Replacement() rune { panic("unimplemented") }
+func (self *Utf8RewriteRule) Sequence(each func(rune)) { panic("unimplemented") }
+func (self *Utf8RewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+
+func (self *FontRewrites) GetUtf8Rule(index uint16) Utf8RewriteRule {
+	panic("unimplemented")
+}
+
+func (self *FontRewrites) Validate(mode FmtValidation) error {
+	// default checks
+	// ...
+
+	// strict checks
+	if mode == FmtStrict {
 		panic("unimplemented")
 	}
 

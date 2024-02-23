@@ -18,6 +18,7 @@ const fontBuilderDefaultFontAuthor = "Authorless"
 const fontBuilderDefaultFontAbout = "No information available."
 
 var ErrBuildNoGlyphs = errors.New("can't build font with no glyphs")
+var errFontDataExceedsMax = errors.New("font data exceeds maximum size")
 
 // A [Font] builder that allows modifying and exporting ggfnt fonts.
 // It can also store and edit glyph category names, kerning classes
@@ -61,9 +62,6 @@ type Font struct {
 	vertLineWidth uint8
 	vertLineGap uint8
 
-	// glyphs data
-	glyphData map[uint64]*glyphData
-
 	// color sections
 	numDyes uint8
 	numPalettes uint8
@@ -72,16 +70,23 @@ type Font struct {
 	dyeAlphas [][]uint8
 	paletteColors [][]color.RGBA
 
-	// variables
-	variables []variableEntry // removing is expensive and requires many checks and reports
+	// glyphs data
+	glyphData map[uint64]*glyphData
 
-	// mapping
-	mappingModes []mappingMode
-	fastMappingTables []*FastMappingTable
-	runeMapping map[rune]codePointMapping
+	// settings
+	words []string
+	settings []settingEntry // removing is expensive and requires many checks and reports
 
-	// FSM
-	// ...
+	// mapping and switches
+	mappingSwitches []mappingSwitchEntry // removing is expensive and requires many checks and reports
+	runeMapping map[rune]mappingEntry
+	// TODO: I could keep a list of "unsynced switches" to make edition "easier".
+	//       it's not a particularly great idea.
+
+	// rewrite rules
+	rewriteConditions []rewriteCondition
+	glyphRules []glyphRewriteRule
+	utf8Rules []utf8RewriteRule
 
 	// kerning
 	horzKerningPairs map[[2]uint64]*editionKerningPair
@@ -144,11 +149,11 @@ func New() *Font {
 	builder.colorSectionNames = []string{"main"}
 	builder.dyeAlphas = [][]uint8{[]uint8{255}}
 
-	// variables
+	// settings
 	// (nothing to initialize here)
 
 	// mapping
-	builder.runeMapping = make(map[rune]codePointMapping, 32)
+	builder.runeMapping = make(map[rune]mappingEntry, 32)
 
 	// kerning
 	builder.horzKerningPairs = make(map[[2]uint64]*editionKerningPair)
@@ -169,7 +174,6 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	// TODO: discrimination of what's an error and what's a panic is
 	//       fairly arbitrary at the moment. I should clean it up
 
-	var err error
 	var data []byte = make([]byte, 0, 1024)
 	var font internal.Font
 
@@ -222,6 +226,58 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	data = append(data, self.vertLineWidth)
 	data = append(data, self.vertLineGap)
 
+	// --- colors ---
+	numColorSections := int(self.numDyes) + int(self.numPalettes)
+	if numColorSections > 255 { panic(invalidInternalState) }
+	if numColorSections == 0 { panic(invalidInternalState) }
+	if len(self.dyeAlphas) != int(self.numDyes) { panic(invalidInternalState) }
+	if len(self.paletteColors) != int(self.numPalettes) { panic(invalidInternalState) }
+	if len(self.colorSectionStarts) != numColorSections { panic(invalidInternalState) }
+	if len(self.colorSectionNames) != numColorSections { panic(invalidInternalState) }
+	font.OffsetToColorSections = uint32(len(data))
+	data = append(data, self.numDyes) // NumDyes
+	data = append(data, self.numPalettes) // NumPalettes
+
+	if numColorSections > 0 {
+		data = append(data, self.colorSectionStarts...) // ColorSectionStarts
+
+		var offset16 uint16
+		for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSectionEndOffsets
+			if i < self.numDyes {
+				offset16 += uint16(len(self.dyeAlphas[i]))
+			} else {
+				offset16 += uint16(len(self.paletteColors[i - self.numDyes]))*2
+			}
+			data = internal.AppendUint16LE(data, offset16)
+		}
+	
+		for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSections
+			if i < self.numDyes { // alpha
+				for _, alpha := range self.dyeAlphas[i] {
+					data = append(data, alpha)
+				}
+			} else {
+				for _, rgba := range self.paletteColors[i - self.numDyes] {
+					data = append(data, rgba.R, rgba.G, rgba.B, rgba.A)
+				}
+			}
+		}
+	
+		font.OffsetToColorSectionNames = uint32(len(data))
+		offset16 = 0
+		for i, _ := range self.colorSectionNames { // ColorSectionNameEndOffsets
+			nameLen := len(self.colorSectionNames[i])
+			if nameLen == 0 || nameLen > 32 { panic(invalidInternalState) }
+			// notice: we aren't validating, hopefully no one messed with anything
+			offset16 += uint16(nameLen)
+			data = internal.AppendUint16LE(data, offset16)
+		}
+	
+		for i, _ := range self.colorSectionNames { // ColorSectionNames
+			data = append(data, self.colorSectionNames[i]...)
+		}
+	}
+
 	// --- glyphs data ---
 	numNamedGlyphs := uint16(0) // guaranteed to fit by construction (numGlyphs is <= MaxGlyphs)
 	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
@@ -251,7 +307,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		endOffset := uint32(0)
 		for _, glyphUID := range self.tempSortingBuffer { // GlyphNameEndOffsets
 			endOffset += uint32(len(self.glyphData[glyphUID].Name))
-			data = internal.AppendUint32LE(data, endOffset)
+			data = internal.AppendUint24LE(data, endOffset)
 		}
 		var prevName string
 		for _, glyphUID := range self.tempSortingBuffer { // GlyphNames
@@ -268,7 +324,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	font.OffsetToGlyphMasks = uint32(len(data))
 	glyphMaskEndOffsetsIndex := len(data)
 	var offset32 uint32
-	data = internal.GrowSliceByN(data, int(numGlyphs)*4)
+	data = internal.GrowSliceByN(data, int(numGlyphs)*3)
 	baseGlyphMasksIndex := len(data)
 	for i := uint16(0); i < numGlyphs; i++ {
 		// safety checks
@@ -287,191 +343,215 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		data = self.tempMaskEncoder.AppendRasterOps(data, glyph.Mask)
 
 		// write offset back on the relevant index
-		offset32 += uint32(len(data) - baseGlyphMasksIndex)
-		internal.EncodeUint32LE(data[glyphMaskEndOffsetsIndex : glyphMaskEndOffsetsIndex + 4], offset32)
-		glyphMaskEndOffsetsIndex += 4
-	}
-
-	// --- color sections ---
-	numColorSections := int(self.numDyes) + int(self.numPalettes)
-	if numColorSections > 255 { panic(invalidInternalState) }
-	if numColorSections == 0 { panic(invalidInternalState) }
-	if len(self.dyeAlphas) != int(self.numDyes) { panic(invalidInternalState) }
-	if len(self.paletteColors) != int(self.numPalettes) { panic(invalidInternalState) }
-	if len(self.colorSectionStarts) != numColorSections { panic(invalidInternalState) }
-	if len(self.colorSectionNames) != numColorSections { panic(invalidInternalState) }
-	font.OffsetToColorSections = uint32(len(data))
-	data = append(data, self.numDyes) // NumDyes
-	data = append(data, self.numPalettes) // NumPalettes
-	data = append(data, self.colorSectionStarts...) // ColorSectionStarts
-
-	var offset16 uint16
-	for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSectionEndOffsets
-		if i < self.numDyes {
-			offset16 += uint16(len(self.dyeAlphas[i]))
-		} else {
-			offset16 += uint16(len(self.paletteColors[i - self.numDyes]))*2
-		}
-		data = internal.AppendUint16LE(data, offset16)
-	}
-
-	for i := uint8(0); i < uint8(numColorSections); i++ { // // ColorSections
-		if i < self.numDyes { // alpha
-			for _, alpha := range self.dyeAlphas[i] {
-				data = append(data, alpha)
-			}
-		} else {
-			for _, rgba := range self.paletteColors[i - self.numDyes] {
-				data = append(data, rgba.R, rgba.G, rgba.B, rgba.A)
-			}
-		}
-	}
-
-	font.OffsetToColorSectionNames = uint32(len(data))
-	offset16 = 0
-	for i, _ := range self.colorSectionNames { // ColorSectionNameEndOffsets
-		nameLen := len(self.colorSectionNames[i])
-		if nameLen == 0 || nameLen > 32 { panic(invalidInternalState) }
-		// notice: we aren't validating, hopefully no one messed with anything
-		offset16 += uint16(nameLen)
-		data = internal.AppendUint16LE(data, offset16)
-	}
-
-	for i, _ := range self.colorSectionNames { // ColorSectionNameEndOffsets
-		data = append(data, self.colorSectionNames[i]...)
+		offset32 = uint32(len(data) - baseGlyphMasksIndex)
+		internal.EncodeUint24LE(data[glyphMaskEndOffsetsIndex : glyphMaskEndOffsetsIndex + 3], offset32)
+		glyphMaskEndOffsetsIndex += 3
 	}
 	
-	// --- variables ---
-	if len(self.variables) > 255 { panic(invalidInternalState) }
-	numVariables := uint8(len(self.variables))
-	font.OffsetToVariables = uint32(len(data))
-	data = append(data, numVariables)
-	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
-	for i := uint64(0); i < uint64(len(self.variables)); i++ {
-		data = self.variables[i].appendValuesTo(data)
-		if self.variables[i].Name != "" {
-			self.tempSortingBuffer = append(self.tempSortingBuffer, i)
+	// --- settings ---
+	if len(self.words) > 255 { panic(invalidInternalState) }
+	numWords := uint8(len(self.words))
+	font.OffsetToWords = uint32(len(data))
+	data = append(data, numWords)
+	if numWords > 0 {
+		// NOTE: haven't checked for duplications, which could be done. it's not on the
+		// spec, though, and it probably shouldn't be as it's not a correctness issue.
+
+		// append word end offsets
+		var offset uint16
+		for _, word := range self.words {
+			err := internal.ValidateBasicName(word) // optional, but at least must check < 32
+			if err != nil { panic(invalidInternalState) }
+			offset += uint16(len(word))
+			data = internal.AppendUint16LE(data, offset)
+		}
+
+		// append actual words
+		for _, word := range self.words {
+			data = append(data, word...)
 		}
 	}
-
-	// here tempSortingBuffer contains the indices of the named variables
-	data = append(data, uint8(len(self.tempSortingBuffer)))
-	if len(self.tempSortingBuffer) > 0 {
-		slices.SortFunc(self.tempSortingBuffer, func(a, b uint64) int {
-			nameA := self.variables[self.tempSortingBuffer[a]].Name
-			nameB := self.variables[self.tempSortingBuffer[b]].Name
-			if nameA < nameB { return -1 }
-			if nameA > nameB { return  1 }
-			return 0
-		})
-
-		for _, index := range self.tempSortingBuffer { // NamedVarKeys
-			data = append(data, uint8(index))
-		}
-		endOffset := uint16(0)
-		for _, index := range self.tempSortingBuffer { // VarNameEndOffsets
-			nameLen := len(self.variables[index].Name)
-			if nameLen > 32 || nameLen == 0 { panic(invalidInternalState) }
-			endOffset += uint16(nameLen)
-			data = internal.AppendUint16LE(data, endOffset)
-		}
-		var prevName string
-		for _, index := range self.tempSortingBuffer { // VariableNames
-			name := self.variables[index].Name
-			if name == prevName {
-				return nil, errors.New("duplicated variable name '" + name + "'")
+	
+	if len(self.settings) > 255 { panic(invalidInternalState) }
+	numSettings := uint8(len(self.settings))
+	font.OffsetToSettingNames = uint32(len(data))
+	font.OffsetToSettingDefinitions = uint32(len(data)) + 1
+	data = append(data, numSettings)
+	if numSettings > 0 {
+		// SettingNameEndOffsets
+		var offset uint16
+		for i, _ := range self.settings {
+			// NOTE: here we might really want to check for repetitions
+			nameLen := len(self.settings[i].Name)
+			if nameLen <= 0 || nameLen > 32 {
+				panic(invalidInternalState)
 			}
-			data = append(data, name...)
-			prevName = name
+			offset += uint16(len(self.settings[i].Values))
+			data = internal.AppendUint16LE(data, offset)
+		}
+
+		// SettingNames
+		for i, _ := range self.settings {
+			data = append(data, self.settings[i].Name...)
+		}
+
+		// SettingEndOffsets
+		font.OffsetToSettingDefinitions = uint32(len(data))
+		for i, _ := range self.settings {
+			numOptions := len(self.settings[i].Values)
+			if numOptions > 255 { panic(invalidInternalState) }
+			data = append(data, uint8(numOptions))
+		}
+
+		// Settings
+		for i, _ := range self.settings {
+			data = append(data, self.settings[i].Values...)
 		}
 	}
 	
 	// --- mapping ---
-	if len(self.mappingModes) > 255 { panic(invalidInternalState) }
-	font.OffsetToMappingModes = uint32(len(data))
-	data = append(data, uint8(len(self.mappingModes)))
-	offset16 = 0
-	for i, _ := range self.mappingModes { // MappingModeRoutineEndOffsets
-		if len(self.mappingModes[i].Program) > 255 { panic(invalidInternalState) }
-		offset16 += uint16(len(self.mappingModes[i].Program))
-		data = internal.AppendUint16LE(data, offset16)
-	}
-	for i, _ := range self.mappingModes { // MappingModeRoutines
-		data = append(data, self.mappingModes[i].Program...)
-	}
+	if len(self.mappingSwitches) > 255 { panic(invalidInternalState) }
+	font.OffsetToMappingSwitches = uint32(len(data))
+	numMappingSwitches := uint8(len(self.mappingSwitches))
+	data = append(data, numMappingSwitches)
+	if numMappingSwitches > 0 {
+		// MappingSwitchEndOffsets
+		var offset uint16
+		for _, mappingSwitch := range self.mappingSwitches {
+			if len(mappingSwitch.Settings) > int(numSettings) { panic(invalidInternalState) }
+			offset += uint16(len(mappingSwitch.Settings))
+			data = internal.AppendUint16LE(data, offset)
+		}
 
-	// fast mapping tables
-	if len(self.fastMappingTables) > 255 { panic(invalidInternalState) }
-	data = append(data, uint8(len(self.fastMappingTables)))
-	totalUsedMem := 0
-	for i := 0; i < len(self.fastMappingTables); i++ { // FastMappingTables
-		font.OffsetsToFastMapTables = append(font.OffsetsToFastMapTables, uint32(len(data)))
-		preLen := len(data)
-		data, err = self.fastMappingTables[i].appendTo(data, self.tempGlyphIndexLookup)
-		if err != nil { return nil, err }
-		totalUsedMem += len(data) - preLen
-		if totalUsedMem > internal.MaxFastMappingTablesSize {
-			return nil, errors.New("fast mapping tables total size exceeds the limit") // TODO: err or panic?
+		// MappingSwitches
+		for _, mappingSwitch := range self.mappingSwitches {
+			data = append(data, mappingSwitch.Settings...)
 		}
 	}
 	
 	// main mapping
-	if len(self.runeMapping) > 65535 { panic(invalidInternalState) }
-	font.OffsetToMainMappings = uint32(len(data))
-	data = internal.AppendUint16LE(data, uint16(len(self.runeMapping)))
-	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
-	for codePoint, _ := range self.runeMapping { // CodePointList
-		if codePoint < 0 { panic(invalidInternalState) }
-		self.tempSortingBuffer = append(self.tempSortingBuffer, uint64(uint32(codePoint)))
-	}
-	slices.Sort(self.tempSortingBuffer) // regular sort
-	for _, codePoint := range self.tempSortingBuffer {
-		data = internal.AppendUint32LE(data, uint32(codePoint))
-	}
-	for _, codePoint := range self.tempSortingBuffer { // CodePointModes
-		data = append(data, self.runeMapping[int32(uint32(codePoint))].Mode)
-	}
-	var offset int = 0
-	for _, codePoint := range self.tempSortingBuffer { // CodePointMainIndices
-		mapping := self.runeMapping[int32(uint32(codePoint))]
-		if len(mapping.Glyphs) == 0 { panic(invalidInternalState) }
-		if len(mapping.Glyphs) == 1 {
-			if mapping.Mode != 255 { panic(invalidInternalState) }
-			glyphIndex, found := self.tempGlyphIndexLookup[mapping.Glyphs[0]]
-			if !found { panic(invalidInternalState) }
-			data = internal.AppendUint16LE(data, glyphIndex)
-		} else {
-			if mapping.Mode == 255 { panic(invalidInternalState) }
-			if len(mapping.Glyphs) > internal.MaxGlyphsPerCodePoint {
-				panic(invalidInternalState)
+	if len(self.runeMapping) > ggfnt.MaxGlyphs { panic(invalidInternalState) }
+	font.OffsetToMapping = uint32(len(data))
+	numMappingEntries := uint16(len(self.runeMapping))
+	data = internal.AppendUint16LE(data, numMappingEntries)
+	if numMappingEntries > 0 {
+		// gather all code points and sort
+		self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
+		for codePoint, _ := range self.runeMapping {
+			if codePoint < 0 || codePoint >= ggfnt.MaxGlyphs { panic(invalidInternalState) }
+			self.tempSortingBuffer = append(self.tempSortingBuffer, uint64(uint32(codePoint)))
+		}
+		slices.Sort(self.tempSortingBuffer)
+		
+		// CodePointsIndex
+		for _, codePoint := range self.tempSortingBuffer {
+			data = internal.AppendUint32LE(data, uint32(codePoint))
+		}
+
+		// reserve space for MappingEndOffsets
+		nextMappingEndOffsetIndex := len(data)
+		data = internal.GrowSliceByN(data, int(numMappingEntries)*3)
+		
+		// append Mappings
+		var offset int = 0
+		for _, codePoint := range self.tempSortingBuffer {
+			mapping := self.runeMapping[int32(uint32(codePoint))]
+			numCases := self.computeNumSwitchCases(mapping.SwitchType)
+			if numCases != len(mapping.SwitchCases) {
+				panic(invalidInternalState) // TODO: maybe we need an error instead of a panic here
 			}
-			offset += len(mapping.Glyphs)
-			if offset > 65535 {
-				return nil, errors.New("too many total glyph indices for custom mode code points")
-			}
-			data = internal.AppendUint16LE(data, uint16(offset))
+
+			// append mapping data
+			preLen := len(data)
+			var err error
+			data, self.tempSortingBuffer, err = mapping.AppendTo(data, self.tempGlyphIndexLookup, self.tempSortingBuffer)
+			if err != nil { return nil, err }
+			offset += len(data) - preLen
+
+			// append offset
+			internal.EncodeUint24LE(data[nextMappingEndOffsetIndex : nextMappingEndOffsetIndex + 3], uint32(offset))
+			nextMappingEndOffsetIndex += 3
 		}
 	}
 
-	data = internal.AppendUint16LE(data, uint16(offset)) // CodePointModeIndices slice size
-	for _, codePoint := range self.tempSortingBuffer { // CodePointModeIndices
-		mapping := self.runeMapping[int32(uint32(codePoint))]
-		if mapping.Mode == 255 { continue }
-		for _, glyphUID := range mapping.Glyphs {
-			glyphIndex, found := self.tempGlyphIndexLookup[glyphUID]
-			if !found { panic(invalidInternalState) }
-			data = internal.AppendUint16LE(data, glyphIndex)
+	// --- rewrite rules ---
+	if len(self.rewriteConditions) > 254 { panic(invalidInternalState) }
+	font.OffsetToRewriteConditions = uint32(len(data))
+	numConditions := uint8(len(self.rewriteConditions))
+	data = append(data, numConditions) // NumConditions
+	if numConditions > 0 {
+		// ConditionEndOffsets
+		var offset uint16
+		for _, condition := range self.rewriteConditions {
+			newOffset := offset + uint16(len(condition.data))
+			if newOffset < offset {
+				return nil, errors.New("rewrite rule conditions contain too much data (can't exceed 65535 bytes)")
+			}
+			offset = newOffset
+			data = internal.AppendUint16LE(data, offset)
+		}
+
+		// Conditions
+		for _, condition := range self.rewriteConditions {
+			data = append(data, condition.data...)
 		}
 	}
 
-	// --- FSMs ---
-	// TODO: to be designed
+	// glyph rules
+	if len(self.glyphRules) > 65535 { panic(invalidInternalState) }
+	font.OffsetToGlyphRewrites = uint32(len(data))
+	numGlyphRules := uint16(len(self.glyphRules))
+	data = internal.AppendUint16LE(data, numGlyphRules) // NumGlyphRules
+	if numGlyphRules > 0 {
+		// GlyphRuleEndOffsets
+		var offset uint32
+		for i, _ := range self.glyphRules {
+			seqLen := len(self.glyphRules[i].sequence)
+			if seqLen > 255 { panic(invalidInternalState) }
+			if seqLen < 1 { panic(invalidInternalState) }
+			offset += (uint32(seqLen) << 1) + 4
+			if offset > 16777215 {
+				return nil, errors.New("glyph rewrite rules exceed maximum allowed size of 16MiB")
+			}
+			data = internal.AppendUint24LE(data, offset)
+		}
+
+		// GlyphRules
+		for i, _ := range self.glyphRules {
+			data = self.glyphRules[i].AppendTo(data, self.tempGlyphIndexLookup)
+		}
+	}
+	
+	// utf8 rules
+	if len(self.utf8Rules) > 65535 { panic(invalidInternalState) }
+	font.OffsetToUtf8Rewrites = uint32(len(data))
+	numUtf8Rules := uint16(len(self.utf8Rules))
+	data = internal.AppendUint16LE(data, numUtf8Rules) // NumUTF8Rules
+	if numUtf8Rules > 0 {
+		// UTF8RuleEndOffsets
+		var offset uint32
+		for i, _ := range self.utf8Rules {
+			seqLen := len(self.utf8Rules[i].sequence)
+			if seqLen > 255 { panic(invalidInternalState) }
+			if seqLen < 1 { panic(invalidInternalState) }
+			offset += (uint32(seqLen) << 2) + 6
+			if offset > 16777215 {
+				return nil, errors.New("utf8 rewrite rules exceed maximum allowed size of 16MiB")
+			}
+			data = internal.AppendUint24LE(data, offset)
+		}
+
+		// UTF8Rules
+		for i, _ := range self.utf8Rules {
+			data = self.utf8Rules[i].AppendTo(data)
+		}
+	}
 
 	// --- kernings ---
-	if len(self.horzKerningPairs) > ggfnt.MaxFontDataSize { panic(invalidInternalState) }
-	if len(self.vertKerningPairs) > ggfnt.MaxFontDataSize { panic(invalidInternalState) }
+	if len(self.horzKerningPairs) > 16777215 { panic(invalidInternalState) }
+	if len(self.vertKerningPairs) > 16777215 { panic(invalidInternalState) }
 	font.OffsetToHorzKernings = uint32(len(data))
-	data = internal.AppendUint32LE(data, uint32(len(self.horzKerningPairs)))
+	data = internal.AppendUint24LE(data, uint32(len(self.horzKerningPairs)))
 	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
 	for key, _ := range self.horzKerningPairs {
 		i1, found := self.tempGlyphIndexLookup[key[0]]
@@ -502,7 +582,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	}
 	
 	font.OffsetToVertKernings = uint32(len(data))
-	data = internal.AppendUint32LE(data, uint32(len(self.vertKerningPairs)))
+	data = internal.AppendUint24LE(data, uint32(len(self.vertKerningPairs)))
 	self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
 	for key, _ := range self.vertKerningPairs {
 		i1, found := self.tempGlyphIndexLookup[key[0]]
@@ -531,7 +611,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		}
 	}
 	if len(data) > ggfnt.MaxFontDataSize {
-		return nil, errors.New("font data exceeds maximum size")
+		return nil, errFontDataExceedsMax
 	}
 
 	font.Data = data
@@ -660,20 +740,23 @@ func (self *Font) ParseEditionData(reader io.Reader) error {
 		}
 	}
 	
-	numNamedMappingModes, err := parser.ReadUint8()
+	numRewriteConditions, err := parser.ReadUint8()
 	if err != nil { return err }
-	if numNamedMappingModes == 255 {
-		return parser.NewError("MappingModeNames must have at most 254 elements")
+	if numRewriteConditions == 255 {
+		return parser.NewError("ConditionNames must have at most 254 elements")
 	}
-	if int(numNamedMappingModes) != len(self.mappingModes) {
-		return parser.NewError("MappingModeNames must have at most 254 elements")
+	if int(numRewriteConditions) != len(self.rewriteConditions) {
+		if len(self.rewriteConditions) > 254 { panic(invalidInternalState) }
+
+		nBytes := internal.AppendByteDigits(uint8(len(self.rewriteConditions)), nil)
+		return parser.NewError("ConditionNames expected to have exactly " + string(nBytes) + " elements")
 	}
-	for i := uint8(0); i < numNamedMappingModes; i++ {
-		modeName, err := parser.ReadShortStr()
+	for i := uint8(0); i < numRewriteConditions; i++ {
+		name, err := parser.ReadShortStr()
 		if err != nil { return err }
-		err = parser.ValidateBasicSpacedName(modeName)
+		err = parser.ValidateBasicSpacedName(name)
 		if err != nil { return err }
-		self.mappingModes[i].Name = modeName
+		self.rewriteConditions[i].EditorName = name
 	}
 
 	// --- EOF ---
@@ -695,12 +778,26 @@ func (self *Font) ClearEditionData() {
 	for _, kerningPair := range self.vertKerningPairs {
 		kerningPair.Class = 0
 	}
-	for i, _ := range self.mappingModes {
-		self.mappingModes[i].Name = ""
+	for i, _ := range self.rewriteConditions {
+		self.rewriteConditions[i].EditorName = ""
 	}
 }
 
 func (self *Font) ValidateEditionData() error {
 	// ...
 	panic("unimplemented")
+}
+
+func (self *Font) computeNumSwitchCases(switchIndex uint8) int {
+	// base special case
+	if switchIndex == 255 { return 1 }
+
+	// general case
+	var numCases int
+	for i, settingIndex := range self.mappingSwitches[switchIndex].Settings {
+		numOptions := len(self.settings[settingIndex].Values)
+		if numOptions == 0 { panic(invalidInternalState) }
+		if i == 0 { numCases = numOptions } else { numCases *= numOptions }
+	}
+	return numCases
 }
