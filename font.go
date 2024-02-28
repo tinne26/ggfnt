@@ -23,6 +23,8 @@ import "github.com/tinne26/ggfnt/internal"
 //  - Use [Font.Kerning]() to access information about the [FontKerning].
 type Font internal.Font
 
+const invalidFontData = "invalid font data" // used for panics
+
 // --- general methods ---
 
 func (self *Font) Export(writer io.Writer) error {
@@ -217,52 +219,187 @@ func (self *FontMetrics) Validate(mode FmtValidation) error {
 
 // TODO: maybe given the importance of the "main" dye, either I change spec
 // or I provide some function to easily search for it? Or "HasDyes?" hmm.
+
 type FontColor Font
 
+// OffsetToColorSections
+// OffsetToColorSectionNames
+
 func (self *FontColor) NumDyes() uint8 {
-	panic("unimplemented")
+	return self.Data[self.OffsetToColorSections + 0]
 }
 
-func (self *FontColor) EachDye(func(DyeKey, string)) {
-	// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
-	panic("unimplemented")
-}
-func (self *FontColor) EachDyeAlpha(DyeKey, func(uint8)) {
-	panic("unimplemented")
+func (self *FontColor) NumPalettes() uint8 {
+	return self.Data[self.OffsetToColorSections + 1]
 }
 
+func (self *FontColor) numColorSections() uint8 {
+	numDyes := self.NumDyes()
+	numColorSections := numDyes + self.NumPalettes()
+	if numColorSections < numDyes { panic(invalidFontData) } // overflow
+	return numColorSections
+}
+
+func (self *FontColor) Count() uint8 {
+	// the color count is not explicit, we need to find where the last
+	// color section begins, and that reveals the number of colors used
+	lastStart := self.Data[self.OffsetToColorSections + 2 + uint32(self.numColorSections()) - 1]
+	if lastStart == 0 { panic(invalidFontData) }
+	return 255 - lastStart + 1
+}
+
+// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
+// TODO: the string is an unsafe.String, so don't store it indefinitely.
+func (self *FontColor) EachDye(fn func(DyeKey, string)) {
+	numDyes := uint32(self.NumDyes())
+	numColorSections := uint32(self.numColorSections())
+	offsetToColorSectionNamesData := self.OffsetToColorSectionNames + (numColorSections << 1)
+
+	var startOffset uint32 = 0
+	for i := uint32(0); i < numDyes; i++ {
+		endOffset := uint32(internal.DecodeUint16LE(self.Data[self.OffsetToColorSectionNames + (i << 1) : ]))
+		if endOffset <= startOffset { panic(invalidFontData) }
+		nameLen := endOffset - startOffset
+		dyeName := unsafe.String(&self.Data[offsetToColorSectionNamesData + startOffset], nameLen)
+		fn(DyeKey(i), dyeName)
+		startOffset = endOffset
+	}
+}
+
+// TODO: mention the order, because the alphas order is unclear.
+func (self *FontColor) EachDyeAlpha(key DyeKey, fn func(uint8)) {
+	numDyes := uint32(self.NumDyes())
+	numColorSections := uint32(self.numColorSections())
+	offsetToColorSectionEndOffsets := self.OffsetToColorSections + 2 + numColorSections
+	offsetToColorSectionsData := offsetToColorSectionEndOffsets + (numColorSections << 1)
+
+	var startOffset uint32 = 0
+	for i := uint32(0); i < numDyes; i++ {
+		endOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToColorSectionEndOffsets + (i << 1) : ]))
+		if endOffset <= startOffset { panic(invalidFontData) }
+		for offset := startOffset; offset < endOffset; offset++ {
+			fn(self.Data[offsetToColorSectionsData + offset])
+		}
+		startOffset = endOffset
+	}
+}
+
+// Returns the range of color indices taken by the dye in the global
+// font color range [0, 255]. Dyes always start at 255, occupying
+// the higher part of the range.
+//
 // An invalid dye key will always return (0, 0). A valid dye key will
 // will always return start and ends > 0. Both start and end are inclusive.
 // Given a valid dye key, the amount of alpha variants is (end - start + 1).
 func (self *FontColor) GetDyeRange(key DyeKey) (start, end uint8) {
-	panic("unimplemented")
+	if uint8(key) >= self.NumDyes() { panic("invalid DyeKey") }
+	keyStart := self.Data[self.OffsetToColorSections + 2 + uint32(key)]
+	if key == 0 { return keyStart, 255 }
+	prevKeyStart := self.Data[self.OffsetToColorSections + 2 + uint32(key) - 1]
+	if prevKeyStart <= keyStart { panic(invalidFontData) }
+	return keyStart, prevKeyStart - 1
 }
 
-func (self *FontColor) NumPalettes() uint8 {
-	panic("unimplemented")
+func (self *FontColor) EachPalette(fn func(PaletteKey, string)) {
+	numDyes := uint32(self.NumDyes())
+	numPalettes := uint32(self.NumPalettes())
+	numColorSections := numDyes + numPalettes
+	if numColorSections > 255 { panic(invalidFontData) }
+	offsetToColorSectionNamesData := self.OffsetToColorSectionNames + (numColorSections << 1)
+
+	var startOffset uint32 = 0
+	for i := numDyes; i < numColorSections; i++ {
+		endOffset := uint32(internal.DecodeUint16LE(self.Data[self.OffsetToColorSectionNames + (i << 1) : ]))
+		if endOffset <= startOffset { panic(invalidFontData) }
+		nameLen := endOffset - startOffset
+		paletteName := unsafe.String(&self.Data[offsetToColorSectionNamesData + startOffset], nameLen)
+		fn(PaletteKey(i - numDyes), paletteName)
+		startOffset = endOffset
+	}
 }
 
-func (self *FontColor) EachPalette(func(PaletteKey, string)) {
-	panic("unimplemented")
-}
-func (self *FontColor) EachPaletteColor(PaletteKey, func(color.RGBA)) {
-	panic("unimplemented")
+func (self *FontColor) EachPaletteColor(key PaletteKey, fn func(color.RGBA)) {
+	numDyes := uint32(self.NumDyes())
+	numPalettes := uint32(self.NumPalettes())
+	numColorSections := numDyes + numPalettes
+	if numColorSections > 255 { panic(invalidFontData) } // discretional assertion
+	offsetToColorSectionEndOffsets := self.OffsetToColorSections + 2 + numColorSections
+	offsetToColorSectionsData := offsetToColorSectionEndOffsets + (numColorSections << 1)
+
+	var startOffset uint32 = 0
+	for i := numDyes; i < numColorSections; i++ {
+		endOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToColorSectionEndOffsets + (i << 1) : ]))
+		if endOffset <= startOffset { panic(invalidFontData) }
+		for offset := startOffset; offset < endOffset; offset += 4 {
+			r := self.Data[offsetToColorSectionsData + offset + 0]
+			g := self.Data[offsetToColorSectionsData + offset + 1]
+			b := self.Data[offsetToColorSectionsData + offset + 2]
+			a := self.Data[offsetToColorSectionsData + offset + 3]
+			fn(color.RGBA{r, g, b, a})
+		}
+		startOffset = endOffset
+	}
 }
 
+// Returns the range of color indices taken by the palette in the global
+// font color range [0, 255]. Palettes always start after dyes.
+//
 // An invalid palette key will always return (0, 0). A valid palette
 // key will always return start and ends > 0. Both start and end are
 // inclusive. Given a valid palette key, the size is (end - start + 1).
 func (self *FontColor) GetPaletteRange(key PaletteKey) (start, end uint8) {
-	panic("unimplemented")
-}
-
-func (self *FontColor) Count() uint8 {
-	panic("unimplemented") // (255 - ColorSectionStarts[last]) + 1
+	if uint8(key) >= self.NumPalettes() { panic("invalid PaletteKey") }
+	
+	numDyes := self.NumDyes()
+	relKey := uint32(numDyes) + uint32(key)
+	keyStart := self.Data[self.OffsetToColorSections + 2 + relKey]
+	if 255 - keyStart < numDyes { panic(invalidFontData) }
+	if key == 0 && numDyes == 0 { return keyStart, 255 }
+	prevKeyStart := self.Data[self.OffsetToColorSections + 2 + relKey - 1]
+	if prevKeyStart <= keyStart { panic(invalidFontData) }
+	return keyStart, prevKeyStart - 1
 }
 
 func (self *FontColor) Validate(mode FmtValidation) error {
 	// default checks
-	// ...
+	numDyes     := uint32(self.NumDyes())
+	numPalettes := uint32(self.NumPalettes())
+	numColorSections := numDyes + numPalettes
+	if numColorSections > 255 {
+		return errors.New("NumDyes + NumPalettes can't exceed 255")
+	}
+
+	// check section sizes vs offsets
+	startsIndex  := self.OffsetToColorSections + 2
+	offsetsIndex := startsIndex + numColorSections
+	prevSectionEnd := uint16(256) // exclusive
+	prevOffset := uint16(0)
+	for i := uint32(0); i < numColorSections; i++ {
+		sectionStart := uint16(self.Data[startsIndex])
+		if sectionStart >= prevSectionEnd {
+			return errors.New("invalid ColorSectionStarts sequence")
+		}
+		sectionSize := prevSectionEnd - sectionStart
+		endOffset := internal.DecodeUint16LE(self.Data[offsetsIndex : ])
+
+		if i < numDyes {
+			if endOffset - prevOffset != sectionSize {
+				return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (dye shades count)")
+			}
+		} else {
+			if endOffset - prevOffset != sectionSize*4 {
+				return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (palette color count)")
+			}
+		}
+
+		offsetsIndex += 2
+		startsIndex  += 1
+		prevOffset = endOffset
+		prevSectionEnd = sectionStart
+	}
+
+	// verify paletted RGBA values (premult alpha checks)
+	// TODO ...
 
 	// strict checks
 	if mode == FmtStrict {

@@ -41,7 +41,7 @@ Misc.:
 
 All data sections are defined consecutively and they are all non-skippable.
 
-Many data blobs are indexed with "EndOffset" arrays. The first element then would be defined in `blob[0 : EndOffset[0]]`. The second element would be defined in `blob[EndOffset[0] : EndOffset[1]]`, and so on. The length of the data blob is `EndOffset[NumElements]`.
+Many data blobs are indexed with "EndOffset" arrays. The first element would be defined by `blob[0 : EndOffset[0]]`, the second by `blob[EndOffset[0] : EndOffset[1]]`, and so on. The length of the data blob is `EndOffset[NumElements - 1]`.
 
 ## Signature
 
@@ -132,13 +132,15 @@ Palettes are sets of "static" colors. A renderer might allow swapping the colors
 NumDyes uint8
 NumPalettes uint8 // sum of NumDyes + NumPalettes can't exceed 255
 ColorSectionStarts [NumDyes + NumPalettes]uint8 // inclusive, can't be zero, in descending order
-ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length must be checked at parsing time
+ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length should be checked at parsing time
 ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
 ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
 ColorSectionNames blob[...]
 ```
 
 > Note for GPU renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
+
+TODO: actually, ColorSectionStarts is not really necessary. It's basically giving us the size, but that can be derived from EndOffsets and NumDyes too. Unless EndOffsets were being used in a hacky way, which I think should be explicitly forbidden (though it's fairly obvious that it could make everything break).
 
 ### Glyphs data
 

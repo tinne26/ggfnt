@@ -246,7 +246,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 			if i < self.numDyes {
 				offset16 += uint16(len(self.dyeAlphas[i]))
 			} else {
-				offset16 += uint16(len(self.paletteColors[i - self.numDyes]))*2
+				offset16 += uint16(len(self.paletteColors[i - self.numDyes])) << 2
 			}
 			data = internal.AppendUint16LE(data, offset16)
 		}
