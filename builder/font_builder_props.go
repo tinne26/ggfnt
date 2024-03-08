@@ -85,6 +85,7 @@ func (self *Font) GetAscent() uint8 { return self.ascent }
 func (self *Font) GetExtraAscent() uint8 { return self.extraAscent }
 func (self *Font) GetDescent() uint8 { return self.descent }
 func (self *Font) GetExtraDescent() uint8 { return self.extraDescent }
+func (self *Font) GetUppercaseAscent() uint8 { return self.uppercaseAscent } // aka cap height
 func (self *Font) GetLowercaseAscent() uint8 { return self.lowercaseAscent } // aka xheight
 func (self *Font) SetAscent(value uint8) error {
 	// TODO: shouldn't I check for existing glyph collisions?

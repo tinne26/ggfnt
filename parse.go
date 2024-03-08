@@ -64,7 +64,7 @@ func Parse(reader io.Reader) (*Font, error) {
 	// --- metrics ---
 	if traceParsing { fmt.Printf("parsing metrics... (index = %d)\n", parser.Index) }
 	font.OffsetToMetrics = uint32(parser.Index)
-	err = parser.AdvanceBytes(14)
+	err = parser.AdvanceBytes(15)
 	if err != nil { return &font, err }
 
 	font.Data = parser.Bytes // possible slice reallocs
@@ -302,26 +302,6 @@ func Parse(reader io.Reader) (*Font, error) {
 		err = parser.AdvanceBytes(int(conditionsLen))
 		if err != nil { return &font, err }
 	}
-	
-	font.OffsetToGlyphRewrites = uint32(parser.Index)
-	numGlyphRules, err := parser.ReadUint16()
-	if err != nil { return &font, err }
-	if numGlyphRules > 0 {
-		// advance GlyphRuleEndOffsets - 1
-		err := parser.AdvanceBytes(int(numGlyphRules - 1)*3)
-		if err != nil { return &font, err }
-		glyphRulesLen, err := parser.ReadUint24()
-		if int(glyphRulesLen) < int(numGlyphRules)*8 {
-			return &font, parser.NewError("GlyphRuleEndOffsets declares GlyphRules to end before allowed")
-		}
-		if int(glyphRulesLen) > int(numGlyphRules)*514 {
-			return &font, parser.NewError("GlyphRuleEndOffsets declares GlyphRules to end beyond allowed")
-		}
-
-		// advance GlyphRules
-		err = parser.AdvanceBytes(int(glyphRulesLen))
-		if err != nil { return &font, err }
-	}
 
 	font.OffsetToUtf8Rewrites = uint32(parser.Index)
 	numUtf8Rules, err := parser.ReadUint16()
@@ -340,6 +320,26 @@ func Parse(reader io.Reader) (*Font, error) {
 
 		// advance UTF8Rules
 		err = parser.AdvanceBytes(int(utf8RulesLen))
+		if err != nil { return &font, err }
+	}
+
+	font.OffsetToGlyphRewrites = uint32(parser.Index)
+	numGlyphRules, err := parser.ReadUint16()
+	if err != nil { return &font, err }
+	if numGlyphRules > 0 {
+		// advance GlyphRuleEndOffsets - 1
+		err := parser.AdvanceBytes(int(numGlyphRules - 1)*3)
+		if err != nil { return &font, err }
+		glyphRulesLen, err := parser.ReadUint24()
+		if int(glyphRulesLen) < int(numGlyphRules)*8 {
+			return &font, parser.NewError("GlyphRuleEndOffsets declares GlyphRules to end before allowed")
+		}
+		if int(glyphRulesLen) > int(numGlyphRules)*514 {
+			return &font, parser.NewError("GlyphRuleEndOffsets declares GlyphRules to end beyond allowed")
+		}
+
+		// advance GlyphRules
+		err = parser.AdvanceBytes(int(glyphRulesLen))
 		if err != nil { return &font, err }
 	}
 

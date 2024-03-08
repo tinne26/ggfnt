@@ -55,6 +55,7 @@ type Font struct {
 	extraAscent uint8
 	descent uint8
 	extraDescent uint8
+	uppercaseAscent uint8
 	lowercaseAscent uint8
 	horzInterspacing uint8
 	vertInterspacing uint8
@@ -134,6 +135,7 @@ func New() *Font {
 	// --- metrics ---
 	builder.ascent = 9
 	builder.descent = 5
+	builder.uppercaseAscent = 9
 	builder.lowercaseAscent = 5
 	builder.horzInterspacing = 1
 	builder.lineGap = 1
@@ -219,6 +221,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	data = append(data, self.extraAscent)
 	data = append(data, self.descent)
 	data = append(data, self.extraDescent)
+	data = append(data, self.uppercaseAscent)
 	data = append(data, self.lowercaseAscent)
 	data = append(data, self.horzInterspacing)
 	data = append(data, self.vertInterspacing)
@@ -496,31 +499,6 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 			data = append(data, condition.data...)
 		}
 	}
-
-	// glyph rules
-	if len(self.glyphRules) > 65535 { panic(invalidInternalState) }
-	font.OffsetToGlyphRewrites = uint32(len(data))
-	numGlyphRules := uint16(len(self.glyphRules))
-	data = internal.AppendUint16LE(data, numGlyphRules) // NumGlyphRules
-	if numGlyphRules > 0 {
-		// GlyphRuleEndOffsets
-		var offset uint32
-		for i, _ := range self.glyphRules {
-			seqLen := len(self.glyphRules[i].sequence)
-			if seqLen > 255 { panic(invalidInternalState) }
-			if seqLen < 1 { panic(invalidInternalState) }
-			offset += (uint32(seqLen) << 1) + 4
-			if offset > 16777215 {
-				return nil, errors.New("glyph rewrite rules exceed maximum allowed size of 16MiB")
-			}
-			data = internal.AppendUint24LE(data, offset)
-		}
-
-		// GlyphRules
-		for i, _ := range self.glyphRules {
-			data = self.glyphRules[i].AppendTo(data, self.tempGlyphIndexLookup)
-		}
-	}
 	
 	// utf8 rules
 	if len(self.utf8Rules) > 65535 { panic(invalidInternalState) }
@@ -544,6 +522,31 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		// UTF8Rules
 		for i, _ := range self.utf8Rules {
 			data = self.utf8Rules[i].AppendTo(data)
+		}
+	}
+
+	// glyph rules
+	if len(self.glyphRules) > 65535 { panic(invalidInternalState) }
+	font.OffsetToGlyphRewrites = uint32(len(data))
+	numGlyphRules := uint16(len(self.glyphRules))
+	data = internal.AppendUint16LE(data, numGlyphRules) // NumGlyphRules
+	if numGlyphRules > 0 {
+		// GlyphRuleEndOffsets
+		var offset uint32
+		for i, _ := range self.glyphRules {
+			seqLen := len(self.glyphRules[i].sequence)
+			if seqLen > 255 { panic(invalidInternalState) }
+			if seqLen < 1 { panic(invalidInternalState) }
+			offset += (uint32(seqLen) << 1) + 4
+			if offset > 16777215 {
+				return nil, errors.New("glyph rewrite rules exceed maximum allowed size of 16MiB")
+			}
+			data = internal.AppendUint24LE(data, offset)
+		}
+
+		// GlyphRules
+		for i, _ := range self.glyphRules {
+			data = self.glyphRules[i].AppendTo(data, self.tempGlyphIndexLookup)
 		}
 	}
 

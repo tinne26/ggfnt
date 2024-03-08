@@ -84,6 +84,7 @@ Ascent uint8 // font ascent without accounting for diacritics or decorations. ca
 ExtraAscent uint8 // extra ascent for diacritics or decorations, if any required. must be < Ascent
 Descent uint8 // font descent without accounting for diacritics or decorations.
 ExtraDescent uint8 // extra descent for diacritics or decorations, if any is required
+UppercaseAscent uint8 // a.k.a cap height. usually the same value as 'Ascent'
 LowercaseAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
 HorzInterspacing uint8 // default horz spacing between glyphs. typically one or zero
 VertInterspacing uint8 // must be zero if HasVertLayout is false
@@ -173,7 +174,7 @@ Data is encoded using raster operations, which are sequences of "control codes" 
 	- 0b0001_0000 : flag for diagonal mode. If set, some of the next flags are interpreted differently.
 	- 0b0010_0000 : draw horizontally; on diagonal mode, diagonal length. Will have `nzuint8` value in the data.
 	- 0b0100_0000 : draw vertically (will have `nzuint8` value in the data); on diagonal mode, flag for ascending (set) or descending (unset) diagonal.
-	- 0b1000_0000 : single pixel draw flag (both draw horz and draw vert flags must be unset).
+	- 0b1000_0000 : single pixel draw flag (both draw horz and draw vert flags must be unset). on diagonal mode, undefined (panic).
 
 Important:
 - The horizontal draw width is always advanced automatically during operations. The vertical draw height is not applied.
@@ -256,21 +257,23 @@ NumConditions uint8 // auxiliar conditions used on some rewrite rules
 ConditionEndOffsets [NumConditions]uint16
 Conditions blob[...]
 
-NumGlyphRules uint16
-GlyphRuleEndOffsets []uint24
-GlyphRules blob[...]
 NumUTF8Rules uint16
 UTF8RuleEndOffsets []uint24
 UTF8Rules blob[...]
+NumGlyphRules uint16
+GlyphRuleEndOffsets []uint24
+GlyphRules blob[...]
 ```
 
 Both sequences of glyph indices and code points are allowed. Each rewrite rule is defined in the following format:
 - For glyph rules: `uint8` for the condition that must be satisfied for the rewrite rule to be applicable (255 if no condition). `uint8` indicating the length of the sequence that will be replaced. `uint16` with the resulting replacement glyph index. And then as many `uint16` glyph indices as indicated earlier.
 - For code points: same as glyph rules, but with `int32`s for code points instead of `uint16`s for glyph indices.
 
-Implementers should compile finite state machines to deal with rewrite rule application. TODO: provide default implementation. The format can't provide pre-compiled FSMs, as a user might want to enable or disable specific ligatures, forcing FSMs recompilations. A JIT FSM compiler would be ideal in this scenario, but that's a pain to implement.
+> The application order for UTF8 and glyph rewrite rules can lead to very different results. There would be three main approaches: (1) process UTF8 and then have a second pass for glyphs processing everything again, (2) process UTF8 and glyphs at the same time, feeding glyphs derived from the UTF8 to the glyph rewrite rules too, and (3) process UTF8 and glyphs at the same time, but each time we change sets we flush the previous process. Both (1) and (2) have the problem that we don't always know the exact position of the code point in the text when we have to map it to a glyph, because later glyph rewriting might move the glyph to an earlier position or completely replace it with something else. Approach (3), instead, has the problem of making glyph rewrite rules fundamentally useless when working with strings. All the approaches have advantages and disadvantages, but we suggest going with approach (2). Internally, (3) is the one with the most predictable behavior, but it's too limiting in some cases.
 
-The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time.
+Implementers should compile finite state machines to deal with rewrite rule application.
+
+The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time. Condiions have to be allowed to change throughout the text.
 
 Conditions are defined in a binary format. The first term is always a control code indicating what follows:
 - 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2).

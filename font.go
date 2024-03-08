@@ -8,6 +8,7 @@ import "compress/gzip"
 import "unsafe"
 
 import "github.com/tinne26/ggfnt/internal"
+import "github.com/tinne26/ggfnt/mask"
 
 // A [Font] is a read-only object that contains all the data required to
 // use a font. To create a [Font], we use the [Parse]() method.
@@ -163,6 +164,11 @@ func (self *FontMetrics) Monospaced() bool { return self.MonoWidth() != 0 }
 func (self *FontMetrics) MonoWidth() uint8 {
 	return self.Data[self.OffsetToMetrics + 3]
 }
+
+// Utility method returning the ascent + descent + line gap.
+func (self *FontMetrics) LineHeight() int {
+	return int(self.Ascent()) + int(self.Descent()) + int(self.LineGap())
+}
 func (self *FontMetrics) Ascent() uint8 {
 	return self.Data[self.OffsetToMetrics + 4]
 }
@@ -175,23 +181,26 @@ func (self *FontMetrics) Descent() uint8 {
 func (self *FontMetrics) ExtraDescent() uint8 {
 	return self.Data[self.OffsetToMetrics + 7]
 }
-func (self *FontMetrics) LowercaseAscent() uint8 {
+func (self *FontMetrics) UppercaseAscent() uint8 {
 	return self.Data[self.OffsetToMetrics + 8]
 }
-func (self *FontMetrics) HorzInterspacing() uint8 {
+func (self *FontMetrics) LowercaseAscent() uint8 {
 	return self.Data[self.OffsetToMetrics + 9]
 }
-func (self *FontMetrics) VertInterspacing() uint8 {
+func (self *FontMetrics) HorzInterspacing() uint8 {
 	return self.Data[self.OffsetToMetrics + 10]
 }
-func (self *FontMetrics) LineGap() uint8 {
+func (self *FontMetrics) VertInterspacing() uint8 {
 	return self.Data[self.OffsetToMetrics + 11]
 }
-func (self *FontMetrics) VertLineWidth() uint8 {
+func (self *FontMetrics) LineGap() uint8 {
 	return self.Data[self.OffsetToMetrics + 12]
 }
-func (self *FontMetrics) VertLineGap() uint8 {
+func (self *FontMetrics) VertLineWidth() uint8 {
 	return self.Data[self.OffsetToMetrics + 13]
+}
+func (self *FontMetrics) VertLineGap() uint8 {
+	return self.Data[self.OffsetToMetrics + 14]
 }
 
 func (self *FontMetrics) Validate(mode FmtValidation) error {
@@ -413,16 +422,74 @@ func (self *FontColor) Validate(mode FmtValidation) error {
 
 type FontGlyphs Font
 
-// Alias for Metrics().NumGlyphs()
-func (self *FontGlyphs) Count() uint16 {
-	return ((*Font)(self)).Metrics().NumGlyphs()
+// local equivalent for (*Font)(self).Metrics().HasVertLayout()
+func (self *FontGlyphs) hasVertLayout() bool {
+	return self.Data[self.OffsetToMetrics + 2] == 1
 }
+
+// Same as [FontMetrics.NumGlyphs]() (it actually refers to the data in the font metrics section).
+func (self *FontGlyphs) Count() uint16 {
+	return internal.DecodeUint16LE(self.Data[self.OffsetToMetrics + 0 : self.OffsetToMetrics + 2])
+}
+
 func (self *FontGlyphs) NamedCount() uint16 {
 	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphNames + 0 : self.OffsetToGlyphNames + 2])
 }
 func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
-func (self *FontGlyphs) RasterizeMask(glyph GlyphIndex) *image.Alpha { panic("unimplemented") }
-func (self *FontGlyphs) Placement(glyph GlyphIndex) GlyphPlacement { panic("unimplemented") }
+func (self *FontGlyphs) RasterizeMask(glyphIndex GlyphIndex) *image.Alpha {
+	startOffset, endOffset := self.getGlyphDataOffsets(glyphIndex)
+	if self.hasVertLayout() { startOffset += 4 } else { startOffset += 1 }
+	numGlyphs := uint32(self.Count())
+	offsetToMasksData := self.OffsetToGlyphMasks + (numGlyphs << 1) + numGlyphs
+	glyphMask, err := mask.Rasterize(self.Data[offsetToMasksData + startOffset : offsetToMasksData + endOffset])
+	if err != nil { panic(err) }
+	return glyphMask
+}
+
+func (self *FontGlyphs) Advance(glyphIndex GlyphIndex) uint8 {
+	numGlyphs := self.Count()
+	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") }  // discretional assertion
+	
+	glyphDataStartOffset := self.getGlyphDataStartOffset(glyphIndex)
+	numGlyphs32 := uint32(numGlyphs)
+	return self.Data[self.OffsetToGlyphMasks + (numGlyphs32 << 1) + numGlyphs32 + glyphDataStartOffset]
+}
+
+func (self *FontGlyphs) Placement(glyphIndex GlyphIndex) GlyphPlacement {
+	numGlyphs := self.Count()
+	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") } // discretional assertion
+
+	glyphDataStartOffset := self.getGlyphDataStartOffset(glyphIndex)
+
+	var placement GlyphPlacement
+	numGlyphs32 := uint32(numGlyphs)
+	placementDataIndex := self.OffsetToGlyphMasks + (numGlyphs32 << 1) + numGlyphs32 + glyphDataStartOffset
+	placement.Advance = self.Data[placementDataIndex]
+	if self.hasVertLayout() {
+		placement.TopAdvance = self.Data[placementDataIndex + 1]
+		placement.BottomAdvance = self.Data[placementDataIndex + 2]
+		placement.HorzCenter = self.Data[placementDataIndex + 3]
+	}
+	return placement
+}
+
+func (self *FontGlyphs) getGlyphDataOffsets(glyphIndex GlyphIndex) (uint32, uint32) {
+	index := uint32(glyphIndex)
+	index = (index << 1) + index
+	
+	glyphDataEndOffset := internal.DecodeUint24LE(self.Data[self.OffsetToGlyphMasks + index : ])
+	if index == 0 { return 0, glyphDataEndOffset }
+	glyphDataStartOffset := internal.DecodeUint24LE(self.Data[self.OffsetToGlyphMasks + index - 3 : ])
+	if glyphDataEndOffset <= glyphDataStartOffset { panic(invalidFontData) } // discretional assertion
+	return glyphDataStartOffset, glyphDataEndOffset
+}
+
+func (self *FontGlyphs) getGlyphDataStartOffset(glyphIndex GlyphIndex) uint32 {
+	if glyphIndex == 0 { return 0 }
+	index := uint32(glyphIndex)
+	index = (index << 1) + index
+	return internal.DecodeUint24LE(self.Data[self.OffsetToGlyphMasks + index - 3 : ])
+}
 
 func (self *FontGlyphs) Validate(mode FmtValidation) error {
 	// default checks
@@ -449,11 +516,24 @@ type SettingKey uint8
 // kind of state must be managed by a renderer or similar.
 type FontSettings Font
 func (self *FontSettings) Count() uint8 {
-	return self.Data[self.OffsetToSettingDefinitions]
+	return self.Data[self.OffsetToSettingNames]
 }
 //func (self *FontSettings) FindKeyByName(name string) SettingKey { panic("unimplemented") }
 //func (self *FontSettings) GetInitValue(key SettingKey) uint8 { panic("unimplemented") }
-func (self *FontSettings) GetNumOptions(key SettingKey) uint8 { panic("unimplemented") }
+func (self *FontSettings) GetNumOptions(key SettingKey) uint8 {
+	if uint8(key) >= self.Count() { return 0 }
+
+	var startOffset uint16
+	endOffset := internal.DecodeUint16LE(self.Data[self.OffsetToSettingDefinitions + (uint32(key) << 1) : ])
+	if key > 0 {
+		startOffset = internal.DecodeUint16LE(self.Data[self.OffsetToSettingDefinitions + (uint32(key - 1) << 1) : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	numOpts := endOffset - startOffset
+	if numOpts > 255 { panic(invalidFontData) }
+	return uint8(numOpts)
+}
+
 func (self *FontSettings) Each(func(key SettingKey, name string)) {
 	panic("unimplemented")
 }
@@ -481,16 +561,144 @@ func (self *FontSettings) Validate(mode FmtValidation) error {
 
 // --- mapping section ---
 
+// Returned from [FontMapping.Utf8]().
+type GlyphMappingGroup struct {
+	font *Font
+	offset uint32
+	caseBranch uint8
+	directMapping bool
+}
+func (self *GlyphMappingGroup) Size() uint8 {
+	if self.directMapping { return 1 }
+	size := self.font.Data[self.offset + 0]
+	if size == 0 { panic(invalidFontData) } // discretional assertion
+	return size
+}
+func (self *GlyphMappingGroup) AnimationFlags() AnimationFlags {
+	if self.directMapping { return 0 }
+	return AnimationFlags(self.font.Data[self.offset + 1])
+}
+func (self *GlyphMappingGroup) CaseBranch() uint8 {
+	return self.caseBranch
+}
+
+// Precondition: choice must be between 0 and GlyphMappingGroup.Size() - 1
+func (self *GlyphMappingGroup) Select(choice uint8) GlyphIndex {
+	// basic case
+	if self.directMapping {
+		if choice != 0 { panic("choice outside valid range") } // discretional assertion
+		return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset : ]))
+	}
+
+	// general case
+	size := self.font.Data[self.offset + 0]
+	if size == 0 { panic(invalidFontData) }
+	if choice >= size { panic("choice outside valid range") } // discretional assertion
+	return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 + (uint32(choice) << 2) : ]))
+}
+
 type FontMapping Font
 
 // More than this might be needed for more complex switch caches, but
 // it might not even be relevant, maybe the default cache is ok, without
 // any interface at all.
-func (self *FontMapping) NumSwitchTypes() uint8 { panic("unimplemented") }
+func (self *FontMapping) NumSwitchTypes() uint8 {
+	return self.Data[self.OffsetToMappingSwitches + 0]
+}
 
-func (self *FontMapping) NumCodePoints() uint32 { panic("unimplemented") }
-func (self *FontMapping) Utf8(codePoint rune) GlyphIndex { panic("unimplemented") }
-func (self *FontMapping) Ascii(codePoint byte) GlyphIndex { panic("unimplemented") }
+func (self *FontMapping) EvaluateSwitch(switchKey uint8, settings []uint8) uint8 {
+	numSwitchTypes := self.NumSwitchTypes()
+	if switchKey >= numSwitchTypes { panic("invalid switch key") }
+
+	var startOffset uint16 = 0
+	endOffset := internal.DecodeUint16LE(self.Data[self.OffsetToMappingSwitches + 1 + uint32(switchKey) : ])
+	if switchKey > 0 {
+		startOffset = internal.DecodeUint16LE(self.Data[self.OffsetToMappingSwitches + uint32(switchKey) : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	endOffset -= 1 // we will evaluate from last to first
+
+	offsetToMappingSwitchesData := self.OffsetToMappingSwitches + 1 + (uint32(numSwitchTypes) << 1)
+	var subgroupCombinations uint8 = 1
+	var result uint8
+	for endOffset > startOffset {
+		settingKey := settings[self.Data[offsetToMappingSwitchesData + uint32(endOffset)]]
+		result += settings[settingKey]*subgroupCombinations
+		subgroupCombinations *= (*FontSettings)(self).GetNumOptions(SettingKey(settingKey))
+		endOffset -= 1
+	}
+
+	// last step: endOffset reached startOffset
+	settingKey := settings[self.Data[offsetToMappingSwitchesData + uint32(endOffset)]]
+	result += settings[settingKey]*subgroupCombinations
+	return result
+}
+
+func (self *FontMapping) NumEntries() uint16 {
+	return internal.DecodeUint16LE(self.Data[self.OffsetToMapping : ])
+}
+
+// func (self *FontMapping) Utf8WithSwitchCache(codePoint rune, switchCache *SwitchCache) (GlyphMappingGroup, bool) {
+// 	panic("unimplemented")
+//    // TODO: same code as Utf8, but with switch cache for switch gets and sets
+// }
+
+func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGroup, bool) {
+	// binary search the code point
+	target := uint32(int32(codePoint))
+	numEntries := self.NumEntries()
+	offsetToSearchIndex := uint(self.OffsetToMapping + 2)
+	minIndex, maxIndex := uint(0), uint(numEntries) - 1
+	for minIndex < maxIndex {
+		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numEntries being uint16
+		value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (midIndex << 2) : ])
+		if value < target {
+			minIndex = midIndex + 1
+		} else {
+			maxIndex = midIndex
+		}
+	}
+
+	if minIndex >= uint(numEntries) { return GlyphMappingGroup{}, false }
+	value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (minIndex << 2) : ])
+	if value != target { return GlyphMappingGroup{}, false }
+	
+	// target found at minIndex
+	offsetToMappingEndOffsets := offsetToSearchIndex + (uint(numEntries) << 2)
+	var startOffset uint32
+	endOffset := internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
+	if minIndex > 0 {
+		minIndex -= 1
+		startOffset = internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	offsetToMappingData := offsetToMappingEndOffsets + uint(numEntries) + (uint(numEntries) << 1)
+	switchType := self.Data[offsetToMappingData + uint(startOffset)]
+	startOffset += 1
+	
+	// basic case: inconditional mapping
+	if switchType == 255 {
+		offset := uint32(offsetToMappingData) + startOffset
+		return GlyphMappingGroup{ font: (*Font)(self), offset: offset, directMapping: true }, true
+	}
+	
+	// general case: switch staircase
+	targetSwitchCase := self.EvaluateSwitch(switchType, settings)
+	group := GlyphMappingGroup{ font: (*Font)(self), caseBranch: targetSwitchCase }
+	for targetSwitchCase > 0 {
+		groupSize := self.Data[offsetToMappingData + uint(startOffset)]
+		if groupSize == 0 { panic(invalidFontData) } // discretional assertion
+		startOffset += 2 + (uint32(groupSize) << 1) // skip group size, animation flags, and then the whole group
+		targetSwitchCase -= 1
+		if startOffset >= endOffset { panic(invalidFontData) } // discretional assertion
+	}
+	group.offset = uint32(offsetToMappingData) + startOffset
+	return group, true
+}
+
+func (self *FontMapping) Ascii(codePoint byte, settings []uint8) (GlyphMappingGroup, bool) {
+	return self.Utf8(rune(codePoint), settings)
+}
 
 func (self *FontMapping) Validate(mode FmtValidation) error {
 	// default checks
@@ -516,6 +724,13 @@ func (self *GlyphRewriteRule) Condition() (uint8, bool) { panic("unimplemented")
 func (self *GlyphRewriteRule) Replacement() GlyphIndex { panic("unimplemented") }
 func (self *GlyphRewriteRule) Sequence(each func(GlyphIndex)) { panic("unimplemented") }
 func (self *GlyphRewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+func (self *GlyphRewriteRule) Equals(other GlyphRewriteRule) bool {
+	if len(self.data) != len(other.data) { return false }
+	for i := 0; i < len(self.data); i++ {
+		if self.data[i] != other.data[i] { return false }
+	}
+	return true
+}
 
 func (self *FontRewrites) GetGlyphRule(index uint16) GlyphRewriteRule {
 	panic("unimplemented")
@@ -526,6 +741,13 @@ func (self *Utf8RewriteRule) Condition() (uint8, bool) { panic("unimplemented") 
 func (self *Utf8RewriteRule) Replacement() rune { panic("unimplemented") }
 func (self *Utf8RewriteRule) Sequence(each func(rune)) { panic("unimplemented") }
 func (self *Utf8RewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+func (self *Utf8RewriteRule) Equals(other Utf8RewriteRule) bool {
+	if len(self.data) != len(other.data) { return false }
+	for i := 0; i < len(self.data); i++ {
+		if self.data[i] != other.data[i] { return false }
+	}
+	return true
+}
 
 func (self *FontRewrites) GetUtf8Rule(index uint16) Utf8RewriteRule {
 	panic("unimplemented")
@@ -538,6 +760,8 @@ func (self *FontRewrites) Validate(mode FmtValidation) error {
 	// strict checks
 	if mode == FmtStrict {
 		panic("unimplemented")
+		// I need to validate that rewrite rules don't contain control indices,
+		// with the only exception of the initial 'GlyphMissing'.
 	}
 
 	return nil

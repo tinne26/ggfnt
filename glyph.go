@@ -4,9 +4,7 @@ type GlyphIndex uint16
 const (
 	GlyphMissing   GlyphIndex = 56789
 	GlyphZilch     GlyphIndex = 56790
-	GlyphTextStart GlyphIndex = 56791
-	GlyphNewLine   GlyphIndex = 56792
-	GlyphTab       GlyphIndex = 56793
+	GlyphNewLine   GlyphIndex = 56791
 
 	GlyphCustomMin GlyphIndex = 60000
 	GlyphCustomMax GlyphIndex = 62000
@@ -28,6 +26,11 @@ const (
 	GlyphTypeCustom    GlyphType = 0b0000_0100
 	GlyphTypeUndefined GlyphType = 0b0000_1000 // >65k
 )
+
+type GlyphRange struct {
+	First GlyphIndex // included
+	Last  GlyphIndex // included
+}
 
 type GlyphPlacement struct {
 	Advance uint8
