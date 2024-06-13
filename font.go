@@ -226,13 +226,7 @@ func (self *FontMetrics) Validate(mode FmtValidation) error {
 
 // --- color section ---
 
-// TODO: maybe given the importance of the "main" dye, either I change spec
-// or I provide some function to easily search for it? Or "HasDyes?" hmm.
-
 type FontColor Font
-
-// OffsetToColorSections
-// OffsetToColorSectionNames
 
 func (self *FontColor) NumDyes() uint8 {
 	return self.Data[self.OffsetToColorSections + 0]
@@ -257,8 +251,15 @@ func (self *FontColor) Count() uint8 {
 	return 255 - lastStart + 1
 }
 
-// TODO: switch to Dyes() iters.Seq2[DyeKey, string] when that's available?
-// TODO: the string is an unsafe.String, so don't store it indefinitely.
+func (self *FontColor) DyeAlphasCount() uint8 {
+	lastDyeStart := self.Data[self.OffsetToColorSections + 2 + uint32(self.NumDyes()) - 1]
+	if lastDyeStart == 0 { panic(invalidFontData) }
+	dyeAlphasCount := 255 - lastDyeStart + 1
+	if dyeAlphasCount < self.NumDyes() { panic(invalidFontData) }
+	return dyeAlphasCount
+}
+
+// Notice: the string is an unsafe.String, so don't store it indefinitely.
 func (self *FontColor) EachDye(fn func(DyeKey, string)) {
 	numDyes := uint32(self.NumDyes())
 	numColorSections := uint32(self.numColorSections())
@@ -294,8 +295,7 @@ func (self *FontColor) EachDyeAlpha(key DyeKey, fn func(uint8)) {
 }
 
 // Returns the range of color indices taken by the dye in the global
-// font color range [0, 255]. Dyes always start at 255, occupying
-// the higher part of the range.
+// font color range [0, 255].
 //
 // An invalid dye key will always return (0, 0). A valid dye key will
 // will always return start and ends > 0. Both start and end are inclusive.
@@ -331,7 +331,7 @@ func (self *FontColor) EachPaletteColor(key PaletteKey, fn func(color.RGBA)) {
 	numDyes := uint32(self.NumDyes())
 	numPalettes := uint32(self.NumPalettes())
 	numColorSections := numDyes + numPalettes
-	if numColorSections > 255 { panic(invalidFontData) } // discretional assertion
+	if numColorSections > 255 { panic(invalidFontData) } // discretionary assertion
 	offsetToColorSectionEndOffsets := self.OffsetToColorSections + 2 + numColorSections
 	offsetToColorSectionsData := offsetToColorSectionEndOffsets + (numColorSections << 1)
 
@@ -448,7 +448,7 @@ func (self *FontGlyphs) RasterizeMask(glyphIndex GlyphIndex) *image.Alpha {
 
 func (self *FontGlyphs) Advance(glyphIndex GlyphIndex) uint8 {
 	numGlyphs := self.Count()
-	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") }  // discretional assertion
+	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") }  // discretionary assertion
 	
 	glyphDataStartOffset := self.getGlyphDataStartOffset(glyphIndex)
 	numGlyphs32 := uint32(numGlyphs)
@@ -457,7 +457,7 @@ func (self *FontGlyphs) Advance(glyphIndex GlyphIndex) uint8 {
 
 func (self *FontGlyphs) Placement(glyphIndex GlyphIndex) GlyphPlacement {
 	numGlyphs := self.Count()
-	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") } // discretional assertion
+	if uint16(glyphIndex) >= numGlyphs { panic("glyphIndex out of range") } // discretionary assertion
 
 	glyphDataStartOffset := self.getGlyphDataStartOffset(glyphIndex)
 
@@ -480,7 +480,7 @@ func (self *FontGlyphs) getGlyphDataOffsets(glyphIndex GlyphIndex) (uint32, uint
 	glyphDataEndOffset := internal.DecodeUint24LE(self.Data[self.OffsetToGlyphMasks + index : ])
 	if index == 0 { return 0, glyphDataEndOffset }
 	glyphDataStartOffset := internal.DecodeUint24LE(self.Data[self.OffsetToGlyphMasks + index - 3 : ])
-	if glyphDataEndOffset <= glyphDataStartOffset { panic(invalidFontData) } // discretional assertion
+	if glyphDataEndOffset <= glyphDataStartOffset { panic(invalidFontData) } // discretionary assertion
 	return glyphDataStartOffset, glyphDataEndOffset
 }
 
@@ -571,7 +571,7 @@ type GlyphMappingGroup struct {
 func (self *GlyphMappingGroup) Size() uint8 {
 	if self.directMapping { return 1 }
 	size := self.font.Data[self.offset + 0]
-	if size == 0 { panic(invalidFontData) } // discretional assertion
+	if size == 0 { panic(invalidFontData) } // discretionary assertion
 	return size
 }
 func (self *GlyphMappingGroup) AnimationFlags() AnimationFlags {
@@ -586,14 +586,14 @@ func (self *GlyphMappingGroup) CaseBranch() uint8 {
 func (self *GlyphMappingGroup) Select(choice uint8) GlyphIndex {
 	// basic case
 	if self.directMapping {
-		if choice != 0 { panic("choice outside valid range") } // discretional assertion
+		if choice != 0 { panic("choice outside valid range") } // discretionary assertion
 		return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset : ]))
 	}
 
 	// general case
 	size := self.font.Data[self.offset + 0]
 	if size == 0 { panic(invalidFontData) }
-	if choice >= size { panic("choice outside valid range") } // discretional assertion
+	if choice >= size { panic("choice outside valid range") } // discretionary assertion
 	return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 + (uint32(choice) << 2) : ]))
 }
 
@@ -638,17 +638,14 @@ func (self *FontMapping) NumEntries() uint16 {
 	return internal.DecodeUint16LE(self.Data[self.OffsetToMapping : ])
 }
 
-// func (self *FontMapping) Utf8WithSwitchCache(codePoint rune, switchCache *SwitchCache) (GlyphMappingGroup, bool) {
-// 	panic("unimplemented")
-//    // TODO: same code as Utf8, but with switch cache for switch gets and sets
-// }
-
+// Notice: line breaks and other control codes shouldn't be requested here,
+// but manually taken into account by the caller instead.
 func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGroup, bool) {
 	// binary search the code point
 	target := uint32(int32(codePoint))
 	numEntries := self.NumEntries()
-	offsetToSearchIndex := uint(self.OffsetToMapping + 2)
-	minIndex, maxIndex := uint(0), uint(numEntries) - 1
+	offsetToSearchIndex := int(self.OffsetToMapping + 2)
+	minIndex, maxIndex := int(0), int(numEntries) - 1
 	for minIndex < maxIndex {
 		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numEntries being uint16
 		value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (midIndex << 2) : ])
@@ -659,12 +656,12 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 		}
 	}
 
-	if minIndex >= uint(numEntries) { return GlyphMappingGroup{}, false }
+	if minIndex >= int(numEntries) { return GlyphMappingGroup{}, false }
 	value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (minIndex << 2) : ])
 	if value != target { return GlyphMappingGroup{}, false }
 	
 	// target found at minIndex
-	offsetToMappingEndOffsets := offsetToSearchIndex + (uint(numEntries) << 2)
+	offsetToMappingEndOffsets := offsetToSearchIndex + (int(numEntries) << 2)
 	var startOffset uint32
 	endOffset := internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
 	if minIndex > 0 {
@@ -672,8 +669,8 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 		startOffset = internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
 	}
 	if endOffset <= startOffset { panic(invalidFontData) }
-	offsetToMappingData := offsetToMappingEndOffsets + uint(numEntries) + (uint(numEntries) << 1)
-	switchType := self.Data[offsetToMappingData + uint(startOffset)]
+	offsetToMappingData := offsetToMappingEndOffsets + int(numEntries) + (int(numEntries) << 1)
+	switchType := self.Data[offsetToMappingData + int(startOffset)]
 	startOffset += 1
 	
 	// basic case: inconditional mapping
@@ -686,11 +683,11 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	targetSwitchCase := self.EvaluateSwitch(switchType, settings)
 	group := GlyphMappingGroup{ font: (*Font)(self), caseBranch: targetSwitchCase }
 	for targetSwitchCase > 0 {
-		groupSize := self.Data[offsetToMappingData + uint(startOffset)]
-		if groupSize == 0 { panic(invalidFontData) } // discretional assertion
+		groupSize := self.Data[offsetToMappingData + int(startOffset)]
+		if groupSize == 0 { panic(invalidFontData) } // discretionary assertion
 		startOffset += 2 + (uint32(groupSize) << 1) // skip group size, animation flags, and then the whole group
 		targetSwitchCase -= 1
-		if startOffset >= endOffset { panic(invalidFontData) } // discretional assertion
+		if startOffset >= endOffset { panic(invalidFontData) } // discretionary assertion
 	}
 	group.offset = uint32(offsetToMappingData) + startOffset
 	return group, true
@@ -716,18 +713,197 @@ func (self *FontMapping) Validate(mode FmtValidation) error {
 // --- rewrite rules section ---
 
 type FontRewrites Font
-func (self *FontRewrites) NumGlyphRules() uint16 { panic("unimplemented") }
-func (self *FontRewrites) NumUTF8Rules() uint16 { panic("unimplemented") }
 
-type GlyphRewriteRule struct { data []uint8 }
-func (self *GlyphRewriteRule) Condition() (uint8, bool) { panic("unimplemented") }
-func (self *GlyphRewriteRule) Replacement() GlyphIndex { panic("unimplemented") }
-func (self *GlyphRewriteRule) Sequence(each func(GlyphIndex)) { panic("unimplemented") }
-func (self *GlyphRewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+func (self *FontRewrites) NumConditions() uint8 {
+	return self.Data[self.OffsetToRewriteConditions + 0]
+}
+
+func (self *FontRewrites) NumGlyphRules() uint16 {
+	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphRewrites + 0 : ])
+}
+
+func (self *FontRewrites) NumUTF8Rules() uint16 {
+	return internal.DecodeUint16LE(self.Data[self.OffsetToUtf8Rewrites + 0 : ])
+}
+
+func (self *FontRewrites) EvaluateCondition(conditionKey uint8, settings []uint8) bool {
+	numConditions := self.NumConditions()
+	if conditionKey >= numConditions { panic("invalid condition key") }
+
+	var startOffset uint16 = 0
+	endOffset := internal.DecodeUint16LE(self.Data[self.OffsetToRewriteConditions + 1 + uint32(conditionKey) : ])
+	if conditionKey > 0 {
+		startOffset = internal.DecodeUint16LE(self.Data[self.OffsetToRewriteConditions + uint32(conditionKey) : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	endOffset -= 1 // we will evaluate from last to first
+
+	offsetToRewriteConditionsData := self.OffsetToRewriteConditions + 1 + (uint32(numConditions) << 1)
+	maxDataIndex := offsetToRewriteConditionsData + uint32(endOffset)
+	if int(maxDataIndex) >= len(self.Data) { panic(invalidFontData) } // discretionary assertion
+	dataIndex := offsetToRewriteConditionsData + uint32(startOffset)
+	endDataIndex, satisfied := self.evalConditionSubexpr(dataIndex, maxDataIndex, settings)
+	if endDataIndex != maxDataIndex { panic(brokenCode) }
+	return satisfied
+
+	// - 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2).
+	// - 0b001X_XXXX: `AND` condition group. The X's indicate the number of terms in the expression (can't be < 2).
+}
+
+// Returns the new dataIndex and the result.
+func (self *FontRewrites) evalConditionSubexpr(dataIndex, maxDataIndex uint32, settings []uint8) (uint32, bool) {
+	if dataIndex > maxDataIndex { panic(invalidFontData) }
+
+	ctrl := self.Data[dataIndex]
+	switch ctrl & 0b1110_0000 {
+	case 0b0000_0000: // OR
+		dataIndex += 1
+		numTerms := (ctrl & 0b0001_1111)
+		for i := uint8(0); i < numTerms; i++ {
+			var satisfied bool
+			dataIndex, satisfied = self.evalConditionSubexpr(dataIndex, maxDataIndex, settings)
+			if dataIndex > maxDataIndex { panic(invalidFontData) } // discretionary assertion
+			if satisfied {
+				numSettings := uint8(min(len(settings), 255))
+				for i < numTerms { // could be optimized in some cases, but it's a pain
+					dataIndex = self.skipConditionSubexpr(dataIndex, maxDataIndex, numSettings)
+					i += 1
+				}
+				return dataIndex, true
+			}
+		}
+		return dataIndex, false
+	case 0b0010_0000: // AND
+		dataIndex += 1
+		numTerms := (ctrl & 0b0001_1111)
+		for i := uint8(0); i < numTerms; i++ {
+			var satisfied bool
+			dataIndex, satisfied = self.evalConditionSubexpr(dataIndex, maxDataIndex, settings)
+			if dataIndex > maxDataIndex { panic(invalidFontData) } // discretionary assertion
+			if !satisfied {
+				numSettings := uint8(min(len(settings), 255))
+				for i < numTerms { // could be optimized in some cases, but it's a pain
+					dataIndex = self.skipConditionSubexpr(dataIndex, maxDataIndex, numSettings)
+					i += 1
+				}
+				return dataIndex, false
+			}
+		}
+		return dataIndex, true
+	case 0b0100_0000: // comparison
+		setting := self.Data[dataIndex + 1]
+		if int(setting) > len(settings) { panic(invalidFontData) } // discretionary assertion
+		operand := self.Data[dataIndex + 2]
+		if (ctrl & 0b0001_0000) == 0 { // comparing two settings
+			if int(operand) > len(settings) { panic(invalidFontData) } // discretionary assertion
+			operand = settings[operand]
+		}
+		switch (ctrl & 0b0000_1111) {
+		case 0b000: return dataIndex + 3, setting == operand
+		case 0b001: return dataIndex + 3, setting != operand
+		case 0b010: return dataIndex + 3, setting  < operand
+		case 0b011: return dataIndex + 3, setting  > operand
+		case 0b100: return dataIndex + 3, setting <= operand
+		case 0b101: return dataIndex + 3, setting >= operand
+		default:
+			panic(invalidFontData)
+		}
+	case 0b0110_0000: // quick comparison `setting == const`
+		constValue := (ctrl & 0b0001_1111)
+		setting := self.Data[dataIndex + 1]
+		if int(setting) > len(settings) { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2, settings[setting] == constValue
+	case 0b1000_0000: // quick comparison `setting != const`
+		constValue := (ctrl & 0b0001_1111)
+		setting := self.Data[dataIndex + 1]
+		if int(setting) > len(settings) { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2, settings[setting] != constValue
+	case 0b1010_0000: // quick comparison `setting < const`
+		constValue := (ctrl & 0b0001_1111)
+		setting := self.Data[dataIndex + 1]
+		if int(setting) > len(settings) { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2, settings[setting] < constValue
+	case 0b1100_0000: // quick comparison `setting > const`
+		constValue := (ctrl & 0b0001_1111)
+		setting := self.Data[dataIndex + 1]
+		if int(setting) > len(settings) { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2, settings[setting] > constValue
+	default: // undefined control mode
+		panic(invalidFontData)
+	}
+}
+
+func (self *FontRewrites) skipConditionSubexpr(dataIndex, maxDataIndex uint32, numSettings uint8) uint32 {
+	if dataIndex > maxDataIndex { panic(invalidFontData) }
+
+	ctrl := self.Data[dataIndex]
+	switch ctrl & 0b1110_0000 {
+	case 0b0000_0000: // OR
+		dataIndex += 1
+		numTerms := (ctrl & 0b0001_1111)
+		for i := uint8(0); i < numTerms; i++ {
+			dataIndex = self.skipConditionSubexpr(dataIndex, maxDataIndex, numSettings)
+			if dataIndex > maxDataIndex { panic(invalidFontData) } // discretionary assertion
+		}
+		return dataIndex
+	case 0b0010_0000: // AND
+		dataIndex += 1
+		numTerms := (ctrl & 0b0001_1111)
+		for i := uint8(0); i < numTerms; i++ {
+			dataIndex = self.skipConditionSubexpr(dataIndex, maxDataIndex, numSettings)
+			if dataIndex > maxDataIndex { panic(invalidFontData) } // discretionary assertion
+		}
+		return dataIndex
+	case 0b0100_0000: // comparison
+		if self.Data[dataIndex + 1] > numSettings { panic(invalidFontData) } // discretionary assertion
+		if (ctrl & 0b0001_0000) == 0 { // comparing two settings
+			if self.Data[dataIndex + 2] > numSettings { panic(invalidFontData) } // discretionary assertion
+		}
+		switch (ctrl & 0b0000_1111) {
+		case 0b000: return dataIndex + 3
+		case 0b001: return dataIndex + 3
+		case 0b010: return dataIndex + 3
+		case 0b011: return dataIndex + 3
+		case 0b100: return dataIndex + 3
+		case 0b101: return dataIndex + 3
+		default:
+			panic(invalidFontData)
+		}
+	case 0b0110_0000: // quick comparison `setting == const`
+		if self.Data[dataIndex + 1] > numSettings { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2
+	case 0b1000_0000: // quick comparison `setting != const`
+		if self.Data[dataIndex + 1] > numSettings { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2
+	case 0b1010_0000: // quick comparison `setting < const`
+		if self.Data[dataIndex + 1] > numSettings { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2
+	case 0b1100_0000: // quick comparison `setting > const`
+		if self.Data[dataIndex + 1] > numSettings { panic(invalidFontData) } // discretionary assertion
+		return dataIndex + 2
+	default: // undefined control mode
+		panic(invalidFontData)
+	}
+}
+
+type GlyphRewriteRule internal.RawBlock
+// TODO: a validation method would be nice
+func (self *GlyphRewriteRule) Condition() uint8 { return self.Data[0] } // 255 means no condition
+func (self *GlyphRewriteRule) HeadLen() uint8 { return self.Data[1] }
+func (self *GlyphRewriteRule) BodyLen() uint8 { return self.Data[2] }
+func (self *GlyphRewriteRule) TailLen() uint8 { return self.Data[3] }
+func (self *GlyphRewriteRule) InLen() uint8 { return self.Data[1] + self.Data[2] + self.Data[3] }
+func (self *GlyphRewriteRule) OutLen() uint8 { return self.Data[4] } // sequence size
+func (self *GlyphRewriteRule) EachOut(each func(GlyphIndex)) {
+	outSize := int(self.Data[4])
+	for i := 5; i < 5 + outSize; i += 2 {
+		each(GlyphIndex(internal.DecodeUint16LE(self.Data[i : ])))
+	}
+}
 func (self *GlyphRewriteRule) Equals(other GlyphRewriteRule) bool {
-	if len(self.data) != len(other.data) { return false }
-	for i := 0; i < len(self.data); i++ {
-		if self.data[i] != other.data[i] { return false }
+	if len(self.Data) != len(other.Data) { return false }
+	for i := 0; i < len(self.Data); i++ {
+		if self.Data[i] != other.Data[i] { return false }
 	}
 	return true
 }
@@ -736,20 +912,46 @@ func (self *FontRewrites) GetGlyphRule(index uint16) GlyphRewriteRule {
 	panic("unimplemented")
 }
 
-type Utf8RewriteRule struct { data []uint8 }
-func (self *Utf8RewriteRule) Condition() (uint8, bool) { panic("unimplemented") }
-func (self *Utf8RewriteRule) Replacement() rune { panic("unimplemented") }
-func (self *Utf8RewriteRule) Sequence(each func(rune)) { panic("unimplemented") }
-func (self *Utf8RewriteRule) SequenceSize() uint8 { panic("unimplemented") }
+type Utf8RewriteRule internal.RawBlock
+func (self *Utf8RewriteRule) Condition() uint8 { return self.Data[0] } // 255 means no condition
+func (self *Utf8RewriteRule) HeadLen() uint8 { return self.Data[1] }
+func (self *Utf8RewriteRule) BodyLen() uint8 { return self.Data[2] }
+func (self *Utf8RewriteRule) TailLen() uint8 { return self.Data[3] }
+func (self *Utf8RewriteRule) InLen() uint8 { return self.Data[1] + self.Data[2] + self.Data[3] }
+func (self *Utf8RewriteRule) OutLen() uint8 { return self.Data[4] } // sequence size
+func (self *Utf8RewriteRule) EachOut(each func(rune)) {
+	outSize := int(self.Data[4])
+	for i := 5; i < 5 + outSize; i += 2 {
+		each(rune(internal.DecodeUint32LE(self.Data[i : ])))
+	}
+}
 func (self *Utf8RewriteRule) Equals(other Utf8RewriteRule) bool {
-	if len(self.data) != len(other.data) { return false }
-	for i := 0; i < len(self.data); i++ {
-		if self.data[i] != other.data[i] { return false }
+	if len(self.Data) != len(other.Data) { return false }
+	for i := 0; i < len(self.Data); i++ {
+		if self.Data[i] != other.Data[i] { return false }
 	}
 	return true
 }
 
 func (self *FontRewrites) GetUtf8Rule(index uint16) Utf8RewriteRule {
+	panic("unimplemented")
+}
+
+type GlyphRewriteSet internal.RawBlock
+func (self *GlyphRewriteSet) EachRange(each func(GlyphRange) error) error {
+	panic("unimplemented")
+}
+
+func (self *FontRewrites) GetGlyphSet(set uint8) GlyphRewriteSet {
+	panic("unimplemented")
+}
+
+type Utf8RewriteSet internal.RawBlock
+func (self *Utf8RewriteSet) EachRange(each func(start, end rune) error) error {
+	panic("unimplemented")
+}
+
+func (self *FontRewrites) GetUtf8Set(set uint8) Utf8RewriteSet {
 	panic("unimplemented")
 }
 

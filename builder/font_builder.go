@@ -176,6 +176,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	// TODO: discrimination of what's an error and what's a panic is
 	//       fairly arbitrary at the moment. I should clean it up
 
+	var err error
 	var data []byte = make([]byte, 0, 1024)
 	var font internal.Font
 
@@ -213,6 +214,8 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	data = internal.AppendString(data, self.fontAbout)
 
 	// --- metrics ---
+	err = self.GetMetricsStatus()
+	if err != nil { return nil, err }
 	font.OffsetToMetrics = uint32(len(data))
 	data = internal.AppendUint16LE(data, numGlyphs)
 	data = append(data, internal.BoolToUint8(self.hasVertLayout))
@@ -499,6 +502,14 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 			data = append(data, condition.data...)
 		}
 	}
+
+	// rewrite sets
+	font.OffsetToRewriteUtf8Sets = uint32(len(data))
+	data = append(data, 0) // NumUtf8Sets
+	// ... (TODO)
+	font.OffsetToRewriteGlyphSets = uint32(len(data))
+	data = append(data, 0) // NumGlyphSets
+	// ... (TODO)
 	
 	// utf8 rules
 	if len(self.utf8Rules) > 65535 { panic(invalidInternalState) }

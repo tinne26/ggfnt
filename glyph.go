@@ -32,6 +32,15 @@ type GlyphRange struct {
 	Last  GlyphIndex // included
 }
 
+func (self *GlyphRange) Contains(index GlyphIndex) bool {
+	return index >= self.First && index <= self.Last
+}
+
+func NewRange(first, last GlyphIndex) GlyphRange {
+	if last < first { panic("invalid glyph range: last < first") }
+	return GlyphRange{ First: first, Last: last }
+}
+
 type GlyphPlacement struct {
 	Advance uint8
 	

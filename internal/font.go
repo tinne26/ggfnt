@@ -16,6 +16,8 @@ type Font struct {
 	OffsetToMappingSwitches uint32
 	OffsetToMapping uint32
 	OffsetToRewriteConditions uint32
+	OffsetToRewriteUtf8Sets uint32
+	OffsetToRewriteGlyphSets uint32
 	OffsetToUtf8Rewrites uint32
 	OffsetToGlyphRewrites uint32
 	OffsetToHorzKernings uint32

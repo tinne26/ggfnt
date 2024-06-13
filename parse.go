@@ -1,6 +1,7 @@
 package ggfnt
 
 import "fmt"
+import "os"
 import "io"
 import "io/fs"
 import "slices"
@@ -11,7 +12,7 @@ import "github.com/tinne26/ggfnt/internal"
 const traceParsing = false
 
 // Utility method for parsing from a fs.FS, like when using embed.
-func ParseFS(filesys fs.FS, filename string) (*Font, error) {
+func ParseFromFS(filesys fs.FS, filename string) (*Font, error) {
 	file, err := filesys.Open(filename)
 	if err != nil { return nil, err }
 	stat, err := file.Stat()
@@ -21,8 +22,25 @@ func ParseFS(filesys fs.FS, filename string) (*Font, error) {
 	}
 	
 	font, err := Parse(file)
-	if err != nil { return font, err }
+	if err != nil {
+		_ = file.Close()
+		return font, err
+	}
 	return font, file.Close()
+}
+
+// Utility method for parsing a local font file directly
+// from its path.
+func ParseFromPath(path string) (*Font, error) {
+	file, err := os.Open(path)
+	if err != nil { return nil, err }
+	font, err := Parse(file)
+	if err == nil {
+		return font, file.Close()
+	} else {
+		_ = file.Close()
+		return nil, err
+	}
 }
 
 func Parse(reader io.Reader) (*Font, error) {
@@ -300,6 +318,42 @@ func Parse(reader io.Reader) (*Font, error) {
 
 		// advance Conditions
 		err = parser.AdvanceBytes(int(conditionsLen))
+		if err != nil { return &font, err }
+	}
+
+	font.OffsetToRewriteUtf8Sets = uint32(parser.Index)
+	numUtf8Sets, err := parser.ReadUint8() // NumUTF8Sets
+	if err != nil { return &font, err }
+	if numUtf8Sets > 0 {
+		// advance UTF8SetEndOffsets
+		err := parser.AdvanceBytes(int(numUtf8Sets - 1)*2)
+		if err != nil { return &font, err }
+		utf8SetsLen, err := parser.ReadUint16()
+		if err != nil { return &font, err }
+		if int(utf8SetsLen) < 1 + int(numUtf8Sets)*5 {
+			return &font, parser.NewError("UTF8SetEndOffsets declares UTF8Sets to end before allowed")
+		}
+
+		// advance UTF8Sets
+		err = parser.AdvanceBytes(int(utf8SetsLen))
+		if err != nil { return &font, err }
+	}
+	
+	font.OffsetToRewriteGlyphSets = uint32(parser.Index)
+	numGlyphSets, err := parser.ReadUint8() // NumGlyphSets
+	if err != nil { return &font, err }
+	if numGlyphSets > 0 {
+		// advance GlyphSetEndOffsets
+		err := parser.AdvanceBytes(int(numGlyphSets - 1)*2)
+		if err != nil { return &font, err }
+		glyphSetsLen, err := parser.ReadUint16()
+		if err != nil { return &font, err }
+		if int(glyphSetsLen) < 1 + int(numGlyphSets)*3 {
+			return &font, parser.NewError("GlyphSetEndOffsets declares GlyphSets to end before allowed")
+		}
+
+		// advance GlyphSets
+		err = parser.AdvanceBytes(int(glyphSetsLen))
 		if err != nil { return &font, err }
 	}
 

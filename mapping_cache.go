@@ -1,6 +1,6 @@
 package ggfnt
 
-// TODO: implementation
+// TODO: unimplemented, and needs new strategy, tests, etc.
 
 const noEntry uint32 = 0xFFFF_FFFF
 

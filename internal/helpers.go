@@ -1,5 +1,6 @@
 package internal
 
+import "cmp"
 import "errors"
 import "crypto/rand"
 
@@ -14,12 +15,77 @@ func GrowSliceByN[T any](buffer []T, increase int) []T {
 	}
 }
 
+// This method is only useful when T is a type that's either very
+// large or it contains slices already allocated that we want to
+// preserve and reuse. In those cases, GrowSliceByOne might help
+// reduce GC and new allocations (it can also unnecessarily hog
+// memory when misused).
+func GrowSliceByOne[T any](buffer []T) []T {
+	newSize := len(buffer) + 1
+	if cap(buffer) >= newSize {
+		return buffer[ : newSize]
+	} else {
+		var element T
+		return append(buffer, element)
+	}
+}
+
+// The contents might be cleared.
 func SetSliceSize[T any](buffer []T, size int) []T {
 	if cap(buffer) >= size {
 		return buffer[ : size]
 	} else {
 		return make([]T, size)
 	}
+}
+
+func DeleteElementAt[T any](buffer []T, index int) []T {
+	// trivial cases
+	size := len(buffer)
+	if index + 1  > size { return buffer }
+	if index + 1 == size { return buffer[ : size - 1] }
+	
+	// general case
+	memo := buffer[index]
+	copy(buffer[index : size - 1], buffer[index + 1 : ])
+	buffer[size - 1] = memo // potentially preserve sub-allocated memory
+	return buffer[ : size - 1]
+}
+
+// Like slices.BinarySearch, but without NaN nor overflow support.
+// And better variable names, seriously...
+func BadBinarySearch[T cmp.Ordered](slice []T, target T) (int, bool) {
+	numElements := len(slice)
+	minIndex, maxIndex := 0, numElements
+	for minIndex < maxIndex {
+		ctrIndex := (minIndex + maxIndex) >> 1
+		if slice[ctrIndex] < target {
+			minIndex = ctrIndex + 1
+		} else {
+			maxIndex = ctrIndex
+		}
+	}
+	return minIndex, minIndex < numElements && slice[minIndex] == target
+}
+
+func BasicOrderedNonRepeatInsert[T cmp.Ordered](buffer []T, element T) []T {
+	defaultInsertionIndex := len(buffer)
+	insertionIndex := defaultInsertionIndex
+	for insertionIndex > 0 { // could be a binary search instead
+		candidate := buffer[insertionIndex - 1]
+		if candidate < element { break }
+		if candidate == element { return buffer } // redundant case
+		insertionIndex -= 1
+	}
+	
+	// grow slice, make space for new state if necessary by
+	// shifting previously existing data, and set state index
+	buffer = GrowSliceByOne(buffer)
+	if insertionIndex != defaultInsertionIndex { // make space for new
+		copy(buffer[insertionIndex + 1 : ], buffer[insertionIndex : ])
+	}
+	buffer[insertionIndex] = element
+	return buffer
 }
 
 func BoolErrCheck(value uint8) error {
@@ -160,3 +226,4 @@ func AppendByteDigits(value byte, str []byte) []byte {
 	}
 	return append(str, (value % 10) + '0')
 }
+

@@ -102,6 +102,7 @@ Regarding the glyph range, this font format has multiple areas for control glyph
 	- 56789: missing glyph. Used when a unicode code point doesn't have a corresponding glyph in the font. Notice that this is not the same as the "notdef" glyph. It's recommended that a font has a "notdef" named glyph as the very first glyph, but it's up to the programmer and renderer code to replace 56789 with notdef or panic or return an error or replace with something else.
 	- 56790: the zilch glyph. This can be used when manipulating glyph buffers for padding and optimization purposes, to replace missing glyphs and avoid panicking or other things. Renderers should simply skip this glyph as if nothing happened, not even resetting the previous glyph for kerning, and ignoring them when it comes to rewrite rules.
 	- 56791: the new line glyph. This allows working with glyph index slices without renouncing to line breaks. This should reset the previous glyph for kerning.
+	- TODO: due to unicode-like sequences with variants and zero width spaces, maybe I should have something to omit glyphs too. Zilch glyph can be used to some extent, but the rules are not clearly defined.
 	- ... the rest is undefined. Other potential control indices (most would be implemented at the renderer level): `text-start`, useful for rewrite rules; `wrap-enabler-mark`, to signal line wrapping being possible at custom points; `rewrite-breaker`, to interrupt rewrite rules but be treated as the zilch glyph otherwise; etc.
 - 56900 - 56999: reserved for font-specific control codes. E.g., for use in rewrite rules. Some of these control codes can be named (font-level customization).
 - 57000 - 57999: reserved for renderer-specific control codes (library-level customization).
@@ -139,9 +140,9 @@ ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
 ColorSectionNames blob[...]
 ```
 
-> Note for GPU renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
+ColorSections contains data for dyes first, and then palettes, in natural order. Things can get a bit confusing because ColorSectionStarts are inversed, and we typically use color index 255 as the main dye.
 
-TODO: actually, ColorSectionStarts is not really necessary. It's basically giving us the size, but that can be derived from EndOffsets and NumDyes too. Unless EndOffsets were being used in a hacky way, which I think should be explicitly forbidden (though it's fairly obvious that it could make everything break).
+> Note for GPU renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
 
 ### Glyphs data
 
@@ -185,7 +186,7 @@ There are many ways to encode any single mask. This might not be a trivial probl
 
 Named glyphs are useful to look up "unique" glyphs from within the code, like, "ico-heart-half" or others that may be relevant in your game but you can't or don't want connected to standard unicode code points. These would be mapped to a unicode private area like (U+E000, U+F8FF). Recommended standard named glyphs:
 - `notdef`: rectangle representing missing glyph. This should also be the first glyph in the font.
-Names must conform to `basic-name-regexp`. Names aren't meant to support naming *all* glyphs in the font, only glyphs that have to be referenceable in particular due to *specific game needs* or general operation (e.g. notdef).
+Names must conform to `basic-name-regexp`. Names aren't meant to support naming *all* glyphs in the font, only glyphs that have to be referenceable due to *specific game needs* or general operation (e.g. "notdef").
 
 ### Settings
 
@@ -233,10 +234,10 @@ Each entry of mapping data consists of a switch. The first byte is the switch ty
 	- 0b0000_0010: sequential. The animation should always be played sequentially from start to end or backwards.
 	- ob0000_0100: terminal. The animation represents a vanishing or destructive sequence that shouldn't be automatically rewinded or replayed.
 	- 0b0000_1000: split. The animation is composed of independent fragments that the animation can be stopped at. A split animation should never be sequential, but a non-sequential animation is not always necessarily split.
-	- 0bXXX0_0000: the animation class index. Still undefined. (TODO). Discretional use by the font creator? Maybe leave as custom class flags instead. Like UI vs Char and so on.
+	- 0bXXX0_0000: the animation class index. Still undefined. (TODO). discretionary use by the font creator? Maybe leave as custom class flags instead. Like UI vs Char and so on.
 - 0bXYYY_YYYY: the Y's indicate the subgroup size - 1 (zero doesn't exist). If X is 1, the subgroup is consecutive, so only the first index is indicated. Otherwise, all indices are explicitly provided. Multiple subgroups might be used to reduce memory footprint of consecutive sequences, but too many subgroups will also increase the cost of finding and operating switch cases.
 
-Switches are defined as lists of settings. Based on the amount of combinations and their possible values, we have an exhaustive switch, indexed from 0...N, where N can't be higher than 255. Implementers should cache recent code point to glyph index set results. Going through switch cases is slow, as we need to advance linearly; this is why caching is considered important in this context.
+Switches are defined as lists of settings. Based on the amount of combinations and their possible values, we have an exhaustive switch, indexed from 0...N, where N can't be higher than 255. Implementers should cache recent 'code point to glyph index set' results. Going through switch cases is slow, as we need to advance linearly; this is why caching is considered important in this context.
 
 Mapping to a set of glyph indices and using switches can be useful for a number of features:
 - Stylistic alternates. This can include randomized variations, dialectal glyph variations (for game flavor mostly), conditional font glyph stylizations, etc.
@@ -257,6 +258,13 @@ NumConditions uint8 // auxiliar conditions used on some rewrite rules
 ConditionEndOffsets [NumConditions]uint16
 Conditions blob[...]
 
+NumUTF8Sets uint8
+UTF8SetEndOffsets [NumUTF8Set]uint16
+UTF8Sets blob[...]
+NumGlyphSets uint8
+GlyphSetEndOffsets [NumGlyphSet]uint16
+GlyphSets blob[...]
+
 NumUTF8Rules uint16
 UTF8RuleEndOffsets []uint24
 UTF8Rules blob[...]
@@ -265,25 +273,36 @@ GlyphRuleEndOffsets []uint24
 GlyphRules blob[...]
 ```
 
+Character and glyph sets are defined as a list of components:
+- The first byte is the number of components.
+- 0bX000_0000: undefined. Might be used for component negations in the future, but for the moment we want to avoid excessive implementation complexity.
+- 0b0X00_0000: if 1, the character set is a range (one char + size), otherwise it's a list. The ending char/glyph is inclusive, so size 0 is valid (though rarely correct).
+- 0b00XX_XXXX: the character size of the range or list.
+
 Both sequences of glyph indices and code points are allowed. Each rewrite rule is defined in the following format:
-- For glyph rules: `uint8` for the condition that must be satisfied for the rewrite rule to be applicable (255 if no condition). `uint8` indicating the length of the sequence that will be replaced. `uint16` with the resulting replacement glyph index. And then as many `uint16` glyph indices as indicated earlier.
+- For glyph rules: `uint8` for the condition that must be satisfied for the rewrite rule to be applicable (255 if no condition). Then three bytes with the sizes of head block, body block and tail block. Then a `uint8` indicating the number of elements in the output sequence. Then the output sequence glyph indices, as `uint16`s. The length of the body block must be at least equal to the number of characters in the output sequence. The length of the three blocks together can't exceed 255.
+- After that, we get the definitions of the three blocks: the head block (can be empty), the body block (can't be empty) and the tail block (can be empty). For each one, we have zero (if empty) to many fragments. In the first byte of a fragment, 0bXXXX_0000 defines the number of consecutive character sets, which constitute the first part of the fragment data, and 0b0000_XXXX defines the number of subsequent direct glyphs. Both can be combined if sets and glyphs follow one after another. If not enough elements are defined (based on the block size), there will be another fragment of the same block afterwards. The character sets are represented with single `uint8`s.
 - For code points: same as glyph rules, but with `int32`s for code points instead of `uint16`s for glyph indices.
 
-> The application order for UTF8 and glyph rewrite rules can lead to very different results. There would be three main approaches: (1) process UTF8 and then have a second pass for glyphs processing everything again, (2) process UTF8 and glyphs at the same time, feeding glyphs derived from the UTF8 to the glyph rewrite rules too, and (3) process UTF8 and glyphs at the same time, but each time we change sets we flush the previous process. Both (1) and (2) have the problem that we don't always know the exact position of the code point in the text when we have to map it to a glyph, because later glyph rewriting might move the glyph to an earlier position or completely replace it with something else. Approach (3), instead, has the problem of making glyph rewrite rules fundamentally useless when working with strings. All the approaches have advantages and disadvantages, but we suggest going with approach (2). Internally, (3) is the one with the most predictable behavior, but it's too limiting in some cases.
+Rewrite rules can't exceed 4096 bytes for their definitions.
 
-Implementers should compile finite state machines to deal with rewrite rule application.
+> The application order for UTF8 and glyph rewrite rules can lead to very different results. There would be three main approaches: (1) process UTF8 and then have a second pass for glyphs processing everything again, (2) process UTF8 and glyphs at the same time, feeding glyphs derived from the UTF8 to the glyph rewrite rules too, and (3) process UTF8 and glyphs at the same time, but each time we change sets we flush the previous process. Both (1) and (2) have the problem that we don't always know the exact position of the code point in the text when we have to map it to a glyph, because later glyph rewriting might move the glyph to an earlier position or completely replace it with something else. Approach (3), instead, has the problem of making glyph rewrite rules fundamentally useless when working with strings if utf8 rewrite rules that can collide with them also exist. All the approaches have advantages and disadvantages, but I recommend approach (2). Internally, (3) is the one with the most predictable behavior, but it's too limiting in many cases.
+
+Implementers should compile rules into decision trees, search tables or FSMs to deal with rewrite rule application.
 
 The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time. Condiions have to be allowed to change throughout the text.
 
 Conditions are defined in a binary format. The first term is always a control code indicating what follows:
-- 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2).
-- 0b001X_XXXX: `AND` condition group. The X's indicate the number of terms in the expression (can't be < 2).
+- 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2). The terms can be nested OR and AND groups.
+- 0b001X_XXXX: `AND` condition group. The X's indicate the number of terms in the expression (can't be < 2). The terms can be nested OR and AND groups.
 - 0b010X_YYYY: comparison. If X is 0, we compare two settings. If X is 1, we compare a setting value with a constant. YYYY indicates the operator (000 is `==`, 001 is `!=`, 010 is `<`, 011 is `>`, 100 is `<=`, `101` is `>=`). Followed by two bytes with the settings/constants afterwards.
 - 0b011X_XXXX: quick comparison operator `setting == const`. Constant is encoded in X's. Followed by one byte with the setting index.
 - 0b100X_XXXX: quick comparison `setting != const`. Constant is encoded in X's.
 - 0b101X_XXXX: quick comparison `setting < const`. Constant is encoded in X's.
 - 0b110X_XXXX: quick comparison `setting > const`. Constant is encoded in X's.
 - 0b111X_XXXX: undefined. Maybe consider adding `bool expr cmp bool expr`?
+
+> INTERNAL NOTE: rewrite rules create many more practical problems than I anticipated. Rule heads and tails can overlap and force you to set somewhat arbitrary policies, create complex and unintuitive cases that are user-unfriendly, etc (the glyph that you initially see could possibly change later). Conditions are also problematic when we have to do rollbacks and re-evaluate them (or force us to evaluate them all in advance _just in case_, or develop complex policies for lazy/delayed evaluations). All in all, it gets far too complex for comfort, maintenance and ease of access to the source code.
 
 ### Kernings
 

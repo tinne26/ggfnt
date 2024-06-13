@@ -24,3 +24,8 @@ const MappingConditionArg1Const = 0b0000_1000
 const MappingConditionArg2Var   = 0b0000_0000
 const MappingConditionArg2RNG   = 0b0000_0100
 const MappingConditionArg2Const = 0b0000_1000
+
+const MinGlyphReRuleFmtLen = 11
+const MinUtf8ReRuleFmtLen = 13 // TODO: I don't know, actually
+
+const BrokenCode = "brokenCode"

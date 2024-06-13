@@ -71,6 +71,21 @@ func (self *Font) SetAbout(about string) error {
 
 // ---- metrics ----
 
+// Returns the error status of the metrics. If there are inconsistencies, an
+// error will be returned. This is necessary because during edition you might
+// be changing values and it might be practical to leave them temporarily
+// inconsistent as you adjust everything, but at the end you still want to
+// ensure everything is consistent again.
+func (self *Font) GetMetricsStatus() error {
+	if self.ascent == 0 { return errors.New("ascent must be strictly positive") }
+	if self.ascent <= self.extraAscent { return errors.New("ascent must be greater than extra ascent") }
+	if self.descent <= self.extraDescent { return errors.New("descent value must be greater than extra descent") }
+	if self.ascent < self.lowercaseAscent { return errors.New("ascent must be equal or greater than lowercase ascent") }
+	if self.ascent < self.uppercaseAscent { return errors.New("ascent must be equal or greater than uppercase ascent") }
+	if self.lowercaseAscent > self.uppercaseAscent { return errors.New("lowercase ascent must be equal or greater than uppercase ascent") }
+	return nil
+}
+
 func (self *Font) GetNumGlyphs() int { return len(self.glyphData) }
 func (self *Font) SetVertLayoutUsed(used bool) {
 	// TODO: unclear if I need to check or update anything
@@ -87,38 +102,14 @@ func (self *Font) GetDescent() uint8 { return self.descent }
 func (self *Font) GetExtraDescent() uint8 { return self.extraDescent }
 func (self *Font) GetUppercaseAscent() uint8 { return self.uppercaseAscent } // aka cap height
 func (self *Font) GetLowercaseAscent() uint8 { return self.lowercaseAscent } // aka xheight
-func (self *Font) SetAscent(value uint8) error {
-	// TODO: shouldn't I check for existing glyph collisions?
-	if value == 0 { return errors.New("ascent value must be strictly positive") }
-	if value <= self.extraAscent { return errors.New("ascent value must be greater than extra ascent") }
-	if value < self.lowercaseAscent { return errors.New("ascent value must be equal or greater than lowercase ascent") }
-	self.ascent = value
-	return nil
-}
-func (self *Font) SetExtraAscent(value uint8) error {
-	// TODO: shouldn't I check for existing glyph collisions?
-	if value >= self.ascent { return errors.New("extra ascent value can't be equal or greater than ascent") }
-	self.extraAscent = value
-	return nil
-}
-func (self *Font) SetDescent(value uint8) error {
-	// TODO: shouldn't I check for existing glyph collisions?
-	if value <= self.extraDescent { return errors.New("descent value must be greater than extra descent") }
-	self.descent = value
-	return nil
-}
-func (self *Font) SetExtraDescent(value uint8) error {
-	// TODO: shouldn't I check for existing glyph collisions?
-	if value >= self.descent { return errors.New("extra descent value can't be equal or greater than descent") }
-	self.extraDescent = value
-	return nil
-}
-func (self *Font) SetLowercaseAscent(value uint8) error {
-	// TODO: shouldn't I check for existing glyph collisions?
-	if value > self.ascent { return errors.New("lowercase ascent can't be greater than ascent") }
-	self.lowercaseAscent = value
-	return nil
-}
+
+// TODO: should I check for existing glyph collisions on any metrics that are set?
+func (self *Font) SetAscent(value uint8) { self.ascent = value }
+func (self *Font) SetExtraAscent(value uint8) { self.extraAscent = value }
+func (self *Font) SetDescent(value uint8) { self.descent = value }
+func (self *Font) SetExtraDescent(value uint8) { self.extraDescent = value }
+func (self *Font) SetLowercaseAscent(value uint8) { self.lowercaseAscent = value }
+func (self *Font) SetUppercaseAscent(value uint8) { self.uppercaseAscent = value }
 
 func (self *Font) GetHorzInterspacing() uint8 { return self.horzInterspacing }
 func (self *Font) GetVertInterspacing() uint8 { return self.vertInterspacing }

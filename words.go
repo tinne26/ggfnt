@@ -1,0 +1,318 @@
+package ggfnt
+
+func GetPredefinedWord(i uint8) string {
+	return predefWords[i]
+}
+
+// TODO: complete, reorder, stabilize, expose
+var predefWords = [256]string{
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	"undefined",
+	
+	// seasons
+	"fall",
+	"autumn",
+	"spring",
+	"summer",
+	"winter",
+
+	// misc
+	"pixel",
+	"ggfnt",
+	
+	// temperature
+	"freezing",
+	"frosty",
+	"cold",
+	"warm",
+	"hot",
+
+	// cardinal numbers
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine",
+	"ten",
+
+	// ordinal numbers
+	"first",
+	"second",
+	"third",
+	"fourth",
+	"fifth",
+	"sixth",
+	
+	// continuity
+	"continuous",
+	"connect",
+	"glue",
+	"glued",
+	"disconnect",
+	"join",
+	"split",
+	"separate",
+
+	// completeness
+	"nothing",
+	"everything",
+	"none",
+	"all",
+	"incomplete",
+	"partial",
+	"complete",
+	"half",
+	"halved",
+
+	"apply",
+	"disregard",
+	
+	"shallow",
+	"deep",
+	"omit",
+	"include",
+	"exclude",
+
+	"full-width",
+	"full-height",
+	"squeezed",
+	
+	"ascending",
+	"descending",
+	"slant",
+	"italic",
+	"italicised",
+	"slanted",
+	
+	"small",
+	"big",
+
+	"centered",
+	"aligned",
+	"center",
+	"left",
+	"right",
+
+	"free",
+	"hand",
+	"geometric",
+	"bouncy",
+	"floaty",
+	"serif",
+	"sans",
+	"sans-serif",
+	"swash",
+	"decorated",
+	"icons",
+	"words",
+	"initials",
+	"sterile",
+	"clean",
+	"basic",
+	
+	// caps
+	"small-caps",
+	"unicase",
+	"titling-caps",
+	"petite-caps",
+	"uppercase",
+	"lowercase",
+	
+	// amounts
+	"minimum",
+	"low",
+	"medium",
+	"median",
+	"average",
+	"high",
+	"maximum",
+
+	// parts
+	"top",
+	"bottom",
+	"up",
+	"down",
+	
+	// color and light
+	"dye",
+	"palette",
+	"grayscale",
+	"monochrome",
+	"mono",
+	"colored",
+	"uncolored",
+	"light",
+	"gray",
+	"dark",
+	"opaque",
+	"solid",
+	"pattern",
+	"semi",
+
+	// shape
+	"open",
+	"closed",
+	"rotated",
+	"straight",
+	"perpendicular",
+	"orthogonal",
+	"sharp",
+	"curved",
+	"flat",
+	"smooth",
+	"rough",
+	"thin",
+	"wide",
+	"thick",
+	"slim",
+	"hollow",
+	"inverted",
+	"reversed",
+	"inverse",
+	"reverse",
+	
+	// power
+	"weak",
+	"strong",
+	"hard",
+	"soft",
+
+	// complexity
+	"simple",
+	"minimal",
+	"minimalistic",
+	"complex",
+	"advanced",
+
+	// styles and moods
+	"modern",
+	"futuristic",
+	"traditional",
+	"vintage",
+	"classic",
+	"elegant",
+	"formal",
+	"serious",
+	"professional",
+	"informal",
+	"casual",
+	"playful",
+	"funny",
+	"quirky",
+	"weird",
+	"flashy",
+	"edgy",
+	"trendy",
+	"whimsical",
+	"romantic",
+	"sensual",
+	"cozy",
+	"flowy",
+	"flowery",
+	"ornate",
+
+	"1",
+	"2",
+	"3",
+	"4",
+	"5",
+	"6",
+	"7",
+	"8",
+	"9",
+	"10",
+	"11",
+	"12",
+	"13",
+	"14",
+	"15",
+	"16",
+	"17",
+	"18",
+	"19",
+	"20",
+	"25",
+	"30",
+	"35",
+	"40",
+	"45",
+	"50",
+	"55",
+	"60",
+	"65",
+	"70",
+	"75",
+	"80",
+	"85",
+	"90",
+	"95",
+	"99",
+	"100",
+	
+	"variant-A",
+	"variant-B",
+	"variant-C",
+	"variant-D",
+	"variant-E",
+	"variant-F",
+	"variant-G",
+	"variant-H",
+	
+	"normal",
+	"regular",
+	"tabular",
+	"proportional",
+	"lining",
+	"oldstyle",
+	"no-slash",
+	"slash",
+	
+	"nil",
+	"null",
+	"undefined",
+	"standby",
+	"neutral",
+	"manual",
+	"automatic",
+	"static",
+	"dynamic",
+	"animated",
+	"default",
+	"alt-A",
+	"alt-B",
+	"alt-C",
+	"alt-D",
+	"enabled",
+	"disabled",
+	"active",
+	"inactive",
+	"on",
+	"off",
+}
+
+// func init() {
+// 	for i := 0; i < 256; i++ {
+// 		word := GetPredefinedWord(uint8(i))
+// 		if word == "" {
+// 			fmt.Printf("%d: _____\n", i)
+// 			break
+// 		} else {
+// 			fmt.Printf("%d: %s\n", i, word)
+// 		}
+// 	}
+// }
