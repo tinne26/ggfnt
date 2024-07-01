@@ -7,9 +7,6 @@ package ggfnt
 //   changes. like, "MarkAsLiveSetting(setting uint8, live bool)". or for a 
 //   transition between filled and unfilled, which would be cool.
 
-// TODO: maybe this should be SettingsCache instead of SwitchCache + ConditionsCache.
-//       keeping it all under the same place does make some sense to me.
-
 type SettingsCache struct {
 	mappingSettingRelevanceFlags []uint8 // compressed bool slice
 	rewriteConditionsSettingRelevanceFlags []uint8 // compressed bool slice

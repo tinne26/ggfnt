@@ -2,15 +2,21 @@
 
 A bitmap font format that no one asked for:
 - Designed to be used primarily for indie game development.
-- Can be used with [*Ebitengine*](https://github.com/hajimehoshi/ebiten) through [`tinne26/ptxt`](https://github.com/tinne26/ptxt).
-- Some fonts with permissive licenses are available at [`tinne26/ggfnt-fonts`](https://github.com/tinne26/ggfnt-fonts) (TO BE ADDED).
+- Can be used with [Ebitengine](https://github.com/hajimehoshi/ebiten) through [`tinne26/ptxt`](https://github.com/tinne26/ptxt).
+- Some fonts with permissive licenses are available at [`tinne26/ggfnt-fonts`](https://github.com/tinne26/ggfnt-fonts).
 - Font editor is available at [`tinne26/ggfnt-editor`](https://github.com/tinne26/ggfnt-editor) (TO BE DEVELOPED).
 
 This is an opinionated format with many hard limits, a specific memory layout for the data and a fair amount of unconventional choices (when compared to more standard font formats). Compatibility with existing formats is a non-goal. Being "generally better" than existing formats is a non-goal. I do have some knowledge about text rendering and font formats, but I don't claim to be an authority nor having done extensive research. I simply built what I wanted to build based on my experience with [etxt](https://github.com/tinne26/etxt) and game development with Ebitengine.
 
-TODO: add some examples from ptxt-examples.
+## Status
 
-# Specification
+The basics are functional, but many advanced features and checks and tests and everything are missing. Very WIP.
+
+## Examples
+
+You can see some fonts in action through [tinne26.github.com/ptxt-examples](https://tinne26.github.com/ptxt-examples).
+
+## Specification
 
 See the [specification document](https://github.com/tinne26/ggfnt/blob/main/specification.md).
 

@@ -108,6 +108,7 @@ func (self *Tester) BeginSequence(font *ggfnt.Font, settingsCache *ggfnt.Setting
 	return nil
 }
 
+// Precondition: glyph index can't be a control index.
 func (self *Tester) Feed(glyphIndex ggfnt.GlyphIndex, fn GlyphConfirmationFunc) error {
 	if !self.isOperating { panic(PreViolation) }
 	if glyphIndex == ggfnt.GlyphZilch { return nil } // ignore zilch glyphs

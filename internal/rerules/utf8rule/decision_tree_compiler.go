@@ -124,6 +124,11 @@ func (self *DecisionTreeCompiler) Feed(rule ggfnt.Utf8RewriteRule, index RuleInd
 					return self.states[state].AppendRange(runeRange, matchRule, self.stateLinker)
 				})
 				if err != nil { return err }
+				err = set.EachListRune(func(codePoint rune) error {
+					runeRange := RuneRange{ First: codePoint, Last: codePoint }
+					return self.states[state].AppendRange(runeRange, matchRule, self.stateLinker)
+				})
+				if err != nil { return err }
 			}
 		}
 		

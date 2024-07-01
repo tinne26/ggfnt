@@ -6,7 +6,9 @@ This is a bitmap font format created for indie game development and pixel art ga
 
 Font files use the `.ggfnt` file extension.
 
-File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`, or `bouncy-8d4.ggfnt`. `8d4` indicates that the font's ascent is 8 pixels and the descent is 4 pixels. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory.
+File names should preferently follow the "name-type-size-version.ggfnt" convention, with `type` and `version` being the most optional parts. For example: `bouncy-mono-8d4-v2p14.ggfnt`, or `bouncy-8d4.ggfnt`. `8d4` indicates that the font's typical ascent is 8 pixels and the typical descent is 4 pixels[^1]. The extra ascent and extra descent, as described later in the metrics section, are not considered for this indication. None of this is mandatory.
+
+[^1]: This is currently an open issue in the format regarding the ambiguity of "ascent" and "descent". For example, a font might have all uppercase letters take at most 5 pixels, but then have parentheses and some punctuation symbols go one pixel higher and one pixel lower. What should ascent be, then? For the font name, I feel like 5d0 would be more representative than 6d1, even though font creators would typically use ascent = 6 and descent = 1 (again, this remains too ambiguous). TODO: figure it out...
 
 Maximum font file size is limited to 32MiB per spec, which is much more than enough for practical purposes and eliminates a whole class of problems during parsing, storage and others.
 
@@ -73,6 +75,8 @@ Everything should be fairly self-explanatory. Family is for related groups of fo
 
 Regarding major and minor versions, any incompatible change (removing glyphs or tags, changing their meaning, etc) should happen only on major versions. Version 0 is an exception which should always be considered alpha/unstable.
 
+TODO: what about adding a field for "LICENSE"?
+
 ### Metrics
 
 ```Golang
@@ -85,7 +89,7 @@ ExtraAscent uint8 // extra ascent for diacritics or decorations, if any required
 Descent uint8 // font descent without accounting for diacritics or decorations.
 ExtraDescent uint8 // extra descent for diacritics or decorations, if any is required
 UppercaseAscent uint8 // a.k.a cap height. usually the same value as 'Ascent'
-LowercaseAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
+MidlineAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
 HorzInterspacing uint8 // default horz spacing between glyphs. typically one or zero
 VertInterspacing uint8 // must be zero if HasVertLayout is false
 LineGap uint8 // suggested line gap for the font
@@ -112,13 +116,16 @@ Custom glyphs can be added at runtime with indices in the 60k - 62k range (inclu
 
 The font's basic size is considered to be `Ascent + Descent`. The `LineGap` must be applied between lines of this size, without also adding the extra ascents and descents. This could lead to overlaps in some extreme cases. A font without extra ascents and extra descents will be referred to as a "tightly sized" font.
 
-Having `ExtraDescent` is very uncommon among languages using the latin alphabet, as even the languages that use hooks like "ᶏ" and "ꞔ" rarely descend more than "g", "q" and other common letters. An exception is if only "capital" letters are used (e.g. "Ƒ", "Ģ" or even "Ç").
+Having `ExtraDescent` is very uncommon among languages using the latin alphabet, as even the languages that use hooks like "ᶏ" and "ꞔ" rarely descend more than "g", "q" and other common letters. An exception is if only "capital" letters are used (since you can have characters like "Ƒ", "Ģ" or "Ç").
+TODO: ascent and descent are too ambiguous. Sometimes certain punctuation symbols or parentheses can exceed the ascent and descent of the upper and lowercase letters. I need to either change fields to be less ambiguous or define clearer policies around what we should include in ascent / descent.
+
+ (TODO: decide about this; while centering can get weird, it's unclear what should be the policy in deciding what belongs or does not belong to the descent. One idea would be to have an extra field for it, but it gets kinda weird too. is line height ascent + descent + punctDescent then, or what? it's tricky... but unlike in vectorial fonts, this is a real problem because parens and so on often exceed the basic line dimensions... but even if you make the distinction in the metrics, dealing with it in practical code gets annoying. and then, what about file names? 6d0 might refer to punctuation or uppercase... false advertising, yikes. DECIDE, THIS IS IMPORTANT)
 
 The `ExtraAscent` is quite common unless the font actively "squeezes" capital letters to accommodate accents and diacritic marks like "Ä", "É", "Û" and similar. Some fonts may use a feature flag to make squeezing optional. Squeezing letters is not aesthetic and should be avoided, but on some low-res games it might be necessary. If you only want to do it for the retro feel... please seek help.
 
 `ExtraAscent` and `ExtraDescent` also needs to be used in some fonts with animated or decorated glyphs in order to account for the required extra space.
 
-The `LowercaseAscent` should be set to 0 when no lowercase version of the letters exist. Having unicode mappings from lowercase letters to their capitalized glyphs is discouraged; being strict is better in the font definition context. Diacritic marks on lowecase letters must not be considered for this ascent value. Finally, if lowercase letters are shaped as uppercase letters (changing only the size of lowercase and uppercase letters, known as "small-caps"), this metric still applies and must be set. This can also be done conditionally with a feature flag.
+The `MidlineAscent` should be set to 0 when no lowercase version of the letters exist. Having unicode mappings from lowercase letters to their capitalized glyphs is discouraged; being strict is better in the font definition context. Diacritic marks on lowecase letters must not be considered for this ascent value. Finally, if lowercase letters are shaped as uppercase letters (changing only the size of lowercase and uppercase letters, known as "small-caps"), this metric still applies and must be set. This can also be done conditionally with a feature flag.
 
 If any of the fields is proven to be incorrect during parsing (ascent, extra ascent, etc.), strict parsing should immediately return an error. That being said, verifications can be expensive, so default parsing methods might omit some of these checks that are linear on the amount of font glyphs.
 
@@ -273,15 +280,13 @@ GlyphRuleEndOffsets []uint24
 GlyphRules blob[...]
 ```
 
-Character and glyph sets are defined as a list of components:
-- The first byte is the number of components.
-- 0bX000_0000: undefined. Might be used for component negations in the future, but for the moment we want to avoid excessive implementation complexity.
-- 0b0X00_0000: if 1, the character set is a range (one char + size), otherwise it's a list. The ending char/glyph is inclusive, so size 0 is valid (though rarely correct).
-- 0b00XX_XXXX: the character size of the range or list.
+UTF8 and glyph sets are defined in two parts, a list of element ranges and a list of individual elements:
+- The first byte indicates the number of element ranges we have. Each range is defined by the glyph or code point, plus a uint8 afterwards indicating the range size. For example, {'0', 9} would capture the {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'} range.
+- After that, we get a byte indicating the length of the list of elements, followed by the elements themselves.
 
 Both sequences of glyph indices and code points are allowed. Each rewrite rule is defined in the following format:
 - For glyph rules: `uint8` for the condition that must be satisfied for the rewrite rule to be applicable (255 if no condition). Then three bytes with the sizes of head block, body block and tail block. Then a `uint8` indicating the number of elements in the output sequence. Then the output sequence glyph indices, as `uint16`s. The length of the body block must be at least equal to the number of characters in the output sequence. The length of the three blocks together can't exceed 255.
-- After that, we get the definitions of the three blocks: the head block (can be empty), the body block (can't be empty) and the tail block (can be empty). For each one, we have zero (if empty) to many fragments. In the first byte of a fragment, 0bXXXX_0000 defines the number of consecutive character sets, which constitute the first part of the fragment data, and 0b0000_XXXX defines the number of subsequent direct glyphs. Both can be combined if sets and glyphs follow one after another. If not enough elements are defined (based on the block size), there will be another fragment of the same block afterwards. The character sets are represented with single `uint8`s.
+- After that, we get the definitions of the three blocks: the head block (can be empty), the body block (can't be empty) and the tail block (can be empty). For each one, we have zero (if empty) to many fragments. In the first byte of a fragment, 0bXXXX_0000 defines the number of consecutive character sets, which constitute the first part of the fragment data, and 0b0000_XXXX defines the number of subsequent direct glyphs. Both can be combined if sets and glyphs follow one after another. If not enough elements are defined (based on the block size), there will be another fragment of the same block afterwards. Even if the block is empty, a "zero fragment" must be present to make it easier to parse. The character sets are represented with single `uint8`s. NOTE: this representation might be changed in the future, it can be made considerably shorter for runes.
 - For code points: same as glyph rules, but with `int32`s for code points instead of `uint16`s for glyph indices.
 
 Rewrite rules can't exceed 4096 bytes for their definitions.
@@ -290,7 +295,7 @@ Rewrite rules can't exceed 4096 bytes for their definitions.
 
 Implementers should compile rules into decision trees, search tables or FSMs to deal with rewrite rule application.
 
-The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time. Condiions have to be allowed to change throughout the text.
+The conditions can be cached, but have to be marked as dirty any time a setting is modified, so they can be recomputed next time. Conditions must be allowed to change throughout the text.
 
 Conditions are defined in a binary format. The first term is always a control code indicating what follows:
 - 0b000X_XXXX: `OR` condition group. The X's indicate the number of terms in the expression (can't be < 2). The terms can be nested OR and AND groups.

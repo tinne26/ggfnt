@@ -54,8 +54,10 @@ func Parse(reader io.Reader) (*Font, error) {
 	// read signature first (this is not gzipped, so it's important)
 	n, err := reader.Read(parser.TempBuff[0 : 6])
 	if err != nil || n != 6 {
+		if n == 0 {
+			return &font, parser.NewError("failed to read any data from the file")
+		}
 		return &font, parser.NewError("failed to read file signature")
-		// if debug is required: return font, err
 	}
 	if !slices.Equal(parser.TempBuff[0 : 6], []byte{'t', 'g', 'g', 'f', 'n', 't'}) {
 		return &font, parser.NewError("invalid signature")

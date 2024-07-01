@@ -1,6 +1,7 @@
 package ggfnt
 
 import "io"
+import "fmt"
 import "errors"
 import "image"
 import "image/color"
@@ -184,7 +185,7 @@ func (self *FontMetrics) ExtraDescent() uint8 {
 func (self *FontMetrics) UppercaseAscent() uint8 {
 	return self.Data[self.OffsetToMetrics + 8]
 }
-func (self *FontMetrics) LowercaseAscent() uint8 {
+func (self *FontMetrics) MidlineAscent() uint8 {
 	return self.Data[self.OffsetToMetrics + 9]
 }
 func (self *FontMetrics) HorzInterspacing() uint8 {
@@ -435,7 +436,57 @@ func (self *FontGlyphs) Count() uint16 {
 func (self *FontGlyphs) NamedCount() uint16 {
 	return internal.DecodeUint16LE(self.Data[self.OffsetToGlyphNames + 0 : self.OffsetToGlyphNames + 2])
 }
-func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex { panic("unimplemented") } // notice: might return a control glyph
+
+// If not found, the return value will be [GlyphMissing].
+func (self *FontGlyphs) FindIndexByName(name string) GlyphIndex {
+	// binary search the name
+	numEntries := uint32(self.NamedCount())
+	if numEntries == 0 { return GlyphMissing }
+	minIndex, maxIndex := uint32(0), numEntries - 1
+	for minIndex < maxIndex {
+		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numEntries being uint16
+		value := self.getNthGlyphName(midIndex, numEntries)
+		if bytesSmallerThanStr(value, name) {
+			minIndex = midIndex + 1
+		} else {
+			maxIndex = midIndex
+		}
+	}
+
+	if minIndex >= numEntries { return GlyphMissing }
+	value := self.getNthGlyphName(minIndex, numEntries)
+	if !bytesEqStr(value, name) { return GlyphMissing }
+	idOffset := self.OffsetToGlyphNames + 2 + (minIndex << 1)
+	return GlyphIndex(internal.DecodeUint16LE(self.Data[idOffset : idOffset + 2]))
+}
+
+func (self *FontGlyphs) getNthGlyphName(nth uint32, numNamedGlyphs uint32) []byte {
+	endOffsetsIndex := self.OffsetToGlyphNames + 2 + (numNamedGlyphs << 1)
+	glyphNameEndOffsetIndex := endOffsetsIndex + (nth << 1) + nth
+	endOffset := internal.DecodeUint24LE(self.Data[glyphNameEndOffsetIndex : glyphNameEndOffsetIndex + 3])
+	namesIndex := endOffsetsIndex + (numNamedGlyphs << 1) + numNamedGlyphs
+	if nth == 0 { return self.Data[namesIndex : namesIndex + endOffset] }
+	prevEndOffset := internal.DecodeUint24LE(self.Data[glyphNameEndOffsetIndex - 3 : glyphNameEndOffsetIndex])
+	return self.Data[namesIndex + prevEndOffset : namesIndex + endOffset]
+}
+
+func bytesSmallerThanStr(bytes []byte, str string) bool {
+	for i := 0; i < len(bytes); i++ {
+		if i >= len(str) { return true }
+		if bytes[i] > str[i] { return false }
+	}
+	if len(bytes) == len(str) { return false } // equal
+	return true // smaller
+}
+
+func bytesEqStr(bytes []byte, str string) bool {
+	if len(bytes) != len(str) { return false }
+	for i := 0; i < len(bytes); i++ {
+		if bytes[i] != str[i] { return false }
+	}
+	return true
+}
+
 func (self *FontGlyphs) RasterizeMask(glyphIndex GlyphIndex) *image.Alpha {
 	startOffset, endOffset := self.getGlyphDataOffsets(glyphIndex)
 	if self.hasVertLayout() { startOffset += 4 } else { startOffset += 1 }
@@ -909,7 +960,20 @@ func (self *GlyphRewriteRule) Equals(other GlyphRewriteRule) bool {
 }
 
 func (self *FontRewrites) GetGlyphRule(index uint16) GlyphRewriteRule {
-	panic("unimplemented")
+	numRules := uint32(self.NumGlyphRules())
+	index32 := uint32(index)
+	if index32 >= numRules { panic("invalid glyph rule index") }
+
+	ruleEndOffsetIndex := (self.OffsetToGlyphRewrites + 2) + ((index32 << 1) + index32)
+	ruleEndOffset := internal.DecodeUint24LE(self.Data[ruleEndOffsetIndex : ruleEndOffsetIndex + 3])
+	var ruleStartOffset uint32
+	if index > 0 {
+		ruleStartOffset = internal.DecodeUint24LE(self.Data[ruleEndOffsetIndex - 3 : ruleEndOffsetIndex])
+	}
+
+	rulesBaseOffset := self.OffsetToGlyphRewrites + 2 + ((numRules << 1) + numRules)
+	ruleData := self.Data[rulesBaseOffset + ruleStartOffset : rulesBaseOffset + ruleEndOffset]
+	return GlyphRewriteRule(internal.RawBlock{ ruleData })
 }
 
 type Utf8RewriteRule internal.RawBlock
@@ -932,27 +996,114 @@ func (self *Utf8RewriteRule) Equals(other Utf8RewriteRule) bool {
 	}
 	return true
 }
+func (self *Utf8RewriteRule) String() string {
+	return fmt.Sprintf("Utf8RewriteRule%v", self.Data)
+}
 
 func (self *FontRewrites) GetUtf8Rule(index uint16) Utf8RewriteRule {
-	panic("unimplemented")
+	numRules := uint32(self.NumUTF8Rules())
+	index32 := uint32(index)
+	if index32 >= numRules { panic("invalid utf8 rule index") }
+
+	ruleEndOffsetIndex := (self.OffsetToUtf8Rewrites + 2) + ((index32 << 1) + index32)
+	ruleEndOffset := internal.DecodeUint24LE(self.Data[ruleEndOffsetIndex : ruleEndOffsetIndex + 3])
+	var ruleStartOffset uint32
+	if index > 0 {
+		ruleStartOffset = internal.DecodeUint24LE(self.Data[ruleEndOffsetIndex - 3 : ruleEndOffsetIndex])
+	}
+
+	rulesBaseOffset := self.OffsetToUtf8Rewrites + 2 + ((numRules << 1) + numRules)
+	ruleData := self.Data[rulesBaseOffset + ruleStartOffset : rulesBaseOffset + ruleEndOffset]
+	return Utf8RewriteRule(internal.RawBlock{ ruleData })
 }
 
 type GlyphRewriteSet internal.RawBlock
 func (self *GlyphRewriteSet) EachRange(each func(GlyphRange) error) error {
-	panic("unimplemented")
+	numRanges := int(self.Data[0])
+	for i := 1; i < 1 + numRanges*3; i += 3 {
+		glyphIndex := GlyphIndex(internal.DecodeUint16LE(self.Data[i : i + 2]))
+		err := each(GlyphRange{ First: glyphIndex, Last: glyphIndex + GlyphIndex(self.Data[i + 2]) })
+		if err != nil { return err }
+	}
+	return nil
+}
+
+func (self *GlyphRewriteSet) EachListGlyph(each func(GlyphIndex) error) error {
+	numRanges := int(self.Data[0])
+	elemsIndex := 1 + numRanges*3
+	numElems := int(self.Data[elemsIndex])
+	for i := 0; i < numElems; i += 1 {
+		dataIndex := elemsIndex + 1 + (i << 1)
+		glyphIndex := GlyphIndex(internal.DecodeUint16LE(self.Data[dataIndex : dataIndex + 2]))
+		err := each(glyphIndex)
+		if err != nil { return err }
+	}
+	return nil
+}
+
+func (self *FontRewrites) NumGlyphSets() uint8 {
+	return self.Data[self.OffsetToRewriteGlyphSets + 0]
 }
 
 func (self *FontRewrites) GetGlyphSet(set uint8) GlyphRewriteSet {
-	panic("unimplemented")
+	numSets := uint32(self.NumGlyphSets())
+	set32 := uint32(set)
+	if set32 >= numSets { panic("invalid glyph set") }
+	endOffsetIndex := self.OffsetToRewriteGlyphSets + 1 + (uint32(set) << 1)
+	setEndOffset := uint32(internal.DecodeUint16LE(self.Data[endOffsetIndex : endOffsetIndex + 2]))
+	baseSetsDataIndex := self.OffsetToRewriteGlyphSets + 1 + (numSets << 1)
+	if set32 == 0 {
+		return GlyphRewriteSet{ Data: self.Data[baseSetsDataIndex : baseSetsDataIndex + setEndOffset] }
+	} else {
+		startOffsetIndex := self.OffsetToRewriteGlyphSets + 1 + (uint32(set - 1) << 1)
+		setStartOffset := uint32(internal.DecodeUint16LE(self.Data[startOffsetIndex : startOffsetIndex + 2]))
+		if setStartOffset >= setEndOffset { panic(invalidFontData) }
+		return GlyphRewriteSet{ Data: self.Data[baseSetsDataIndex + setStartOffset : baseSetsDataIndex + setEndOffset] }
+	}
 }
 
 type Utf8RewriteSet internal.RawBlock
 func (self *Utf8RewriteSet) EachRange(each func(start, end rune) error) error {
-	panic("unimplemented")
+	numRanges := int(self.Data[0])
+	for i := 1; i < numRanges*5; i += 5 {
+		codePoint := rune(internal.DecodeUint32LE(self.Data[i : i + 4]))
+		err := each(codePoint, codePoint + rune(self.Data[i + 3]))
+		if err != nil { return err }
+	}
+	return nil
+}
+
+func (self *Utf8RewriteSet) EachListRune(each func(rune) error) error {
+	numRanges := int(self.Data[0])
+	elemsIndex := 1 + numRanges*5
+	numElems := int(self.Data[elemsIndex])
+	for i := 0; i < numElems; i += 1 {
+		dataIndex := elemsIndex + 1 + (i << 2)
+		err := each(rune(internal.DecodeUint32LE(self.Data[dataIndex : dataIndex + 4])))
+		if err != nil { return err }
+	}
+	return nil
+}
+
+func (self *FontRewrites) NumUTF8Sets() uint8 {
+	return self.Data[self.OffsetToRewriteUtf8Sets + 0]
 }
 
 func (self *FontRewrites) GetUtf8Set(set uint8) Utf8RewriteSet {
-	panic("unimplemented")
+	numSets := uint32(self.NumUTF8Sets())
+	set32 := uint32(set)
+	if set32 >= numSets { panic("invalid rune set") }
+	endOffsetIndex := self.OffsetToRewriteUtf8Sets + 1 + (uint32(set) << 1)
+	setEndOffset := uint32(internal.DecodeUint16LE(self.Data[endOffsetIndex : endOffsetIndex + 2]))
+	baseSetsDataIndex := self.OffsetToRewriteUtf8Sets + 1 + (numSets << 1)
+	if set32 == 0 {
+		return Utf8RewriteSet{ Data: self.Data[baseSetsDataIndex : baseSetsDataIndex + setEndOffset] }
+	} else {
+		startOffsetIndex := self.OffsetToRewriteUtf8Sets + 1 + (uint32(set - 1) << 1)
+		setStartOffset := uint32(internal.DecodeUint16LE(self.Data[startOffsetIndex : startOffsetIndex + 2]))
+		if setStartOffset >= setEndOffset { panic(invalidFontData) }
+		return Utf8RewriteSet{ Data: self.Data[baseSetsDataIndex + setStartOffset : baseSetsDataIndex + setEndOffset] }
+	}
 }
 
 func (self *FontRewrites) Validate(mode FmtValidation) error {
@@ -972,9 +1123,38 @@ func (self *FontRewrites) Validate(mode FmtValidation) error {
 // --- kerning section ---
 
 type FontKerning Font
-func (self *FontKerning) NumPairs() uint32 { panic("unimplemented") }
-func (self *FontKerning) NumVertPairs() uint32 { panic("unimplemented") }
-func (self *FontKerning) Get(prev, curr GlyphIndex) int8 { panic("unimplemented") } // binary search based
+func (self *FontKerning) NumPairs() uint32 {
+	return internal.DecodeUint24LE(self.Data[self.OffsetToHorzKernings : ])
+}
+
+func (self *FontKerning) NumVertPairs() uint32 {
+	return internal.DecodeUint24LE(self.Data[self.OffsetToVertKernings : ])
+}
+
+// TODO: this is the next high priority
+func (self *FontKerning) Get(prev, curr GlyphIndex) int8 { // binary search based
+	target := (uint32(prev) << 16) | uint32(curr)
+	numPairs := self.NumPairs()
+	offsetToSearchIndex := int(self.OffsetToHorzKernings + 3)
+	minIndex, maxIndex := int(0), int(numPairs) - 1
+	for minIndex < maxIndex {
+		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numPairs being uint24
+		value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (midIndex << 2) : ])
+		if value < target {
+			minIndex = midIndex + 1
+		} else {
+			maxIndex = midIndex
+		}
+	}
+
+	if minIndex >= int(numPairs) { return 0 } // no kerning
+	value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (minIndex << 2) : ])
+	if value != target { return 0 } // no kerning
+
+	// yes kerning
+	return int8(self.Data[self.OffsetToHorzKernings + 3 + (numPairs << 2) + uint32(minIndex)])
+}
+
 func (self *FontKerning) GetVert(prev, curr GlyphIndex) int8 { panic("unimplemented") } // binary search based
 func (self *FontKerning) EachPair(func (prev, curr GlyphIndex, kern int8)) { panic("unimplemented") }
 func (self *FontKerning) EachVertPair(func (prev, curr GlyphIndex, kern int8)) { panic("unimplemented") }

@@ -1,5 +1,7 @@
 package ggfnt
 
+import "errors"
+
 type GlyphIndex uint16
 const (
 	GlyphMissing   GlyphIndex = 56789
@@ -9,23 +11,6 @@ const (
 	GlyphCustomMin GlyphIndex = 60000
 	GlyphCustomMax GlyphIndex = 62000
 )
-func (self GlyphIndex) String() string { panic("unimplemented") }
-func (self GlyphIndex) Type() GlyphType { panic("unimplemented") }
-
-type GlyphType uint8
-const (
-	GlyphTypeNormal  GlyphType = 0b0000_0001
-	GlyphTypeControl GlyphType = 0b0000_0010
-		// TODO: should we provide any way to distinguish all the subtypes?
-		// GlyphTypeControlPredef
-		// GlyphTypeControlPredefUndef
-		// GlyphTypeControlFont
-		// GlyphTypeControlLibrary
-		// GlyphTypeControlCustom
-		// GlyphTypeControlUndef
-	GlyphTypeCustom    GlyphType = 0b0000_0100
-	GlyphTypeUndefined GlyphType = 0b0000_1000 // >65k
-)
 
 type GlyphRange struct {
 	First GlyphIndex // included
@@ -34,6 +19,12 @@ type GlyphRange struct {
 
 func (self *GlyphRange) Contains(index GlyphIndex) bool {
 	return index >= self.First && index <= self.Last
+}
+
+func (self *GlyphRange) Validate(maxGlyphs uint16) error {
+	if self.First > self.Last { return errors.New("invalid glyph range: First > Last") }
+	if uint16(self.Last) >= maxGlyphs { return errors.New("invalid glyph range: Last exceeds maxGlyphs") }
+	return nil
 }
 
 func NewRange(first, last GlyphIndex) GlyphRange {

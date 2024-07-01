@@ -43,7 +43,7 @@ func (self *Tester) AddRule(rule ggfnt.Utf8RewriteRule) error {
 	// initial assertions
 	if self.isOperating { panic(PreViolation) }
 	if len(rule.Data) < internal.MinUtf8ReRuleFmtLen {
-		return rerules.ErrInvalidReRule
+		return rerules.InvalidUtf8RuleErr(rule)
 	}
 	if len(self.rules) >= 254 { return rerules.ErrTesterTooManyRules }
 

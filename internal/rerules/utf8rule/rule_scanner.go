@@ -16,28 +16,27 @@ type RuleScanner struct {
 	accumulatedBlockCodePoints uint8 // verification purposes only
 }
 
-// Returns any error that might be detected while processing the rule
-// (ErrInvalidReRule is often returned as a catch-all for any issue found).
+// Returns any error that might be detected while processing the rule.
 func (self *RuleScanner) Start(rule ggfnt.Utf8RewriteRule) error {
 	// ensure that rule has enough data and the output sequence is not empty
 	if len(rule.Data) < internal.MinUtf8ReRuleFmtLen || rule.Data[4] == 0 {
-		return rerules.ErrInvalidReRule
+		return rerules.InvalidUtf8RuleErr(rule)
 	}
 
 	// ensure that sum of lengths doesn't exceed 255
 	lenSum := rule.Data[1] + rule.Data[2]
-	if rule.Data[1] > lenSum { return rerules.ErrInvalidReRule }
+	if rule.Data[1] > lenSum { return rerules.InvalidUtf8RuleErr(rule) }
 	lenSum += rule.Data[3]
-	if rule.Data[3] > lenSum { return rerules.ErrInvalidReRule }
+	if rule.Data[3] > lenSum { return rerules.InvalidUtf8RuleErr(rule) }
 
 	// ensure that output length doesn't exceed body length
-	if rule.BodyLen() < rule.OutLen() { return rerules.ErrInvalidReRule }
+	if rule.BodyLen() < rule.OutLen() { return rerules.InvalidUtf8RuleErr(rule) }
 	
 	// reset some fields
 	self.rule = rule
-	self.remainingSets   = 0
+	self.remainingSets = 0
 	self.remainingCodePoints = 0
-	self.accumulatedBlockSets   = 0
+	self.accumulatedBlockSets = 0
 	self.accumulatedBlockCodePoints = 0
 	self.remainingBlockElements = self.rule.Data[1] // head len
 	self.block = RuleHead
@@ -49,7 +48,7 @@ func (self *RuleScanner) Start(rule ggfnt.Utf8RewriteRule) error {
 		self.block = RuleBody
 		self.remainingBlockElements = self.rule.Data[2]
 		if self.remainingBlockElements == 0 || self.remainingBlockElements < self.rule.Data[4] {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(rule)
 		}
 	}
 
@@ -69,15 +68,14 @@ func (self *RuleScanner) HasNext() bool {
 	return int(self.dataIndex) < len(self.rule.Data)
 }
 
-// Returns the next element in the rule (a code point or an
-// uint8 utf8 set). Returns [ErrInvalidReRule] if something is wrong
-// in the rule. Will panic if !HasNext().
+// Returns the next element in the rule (a code point or
+// an uint8 utf8 set), or an error. Panics if !HasNext().
 func (self *RuleScanner) Next() (rune, Utf8SetIndex, error) {
 	// utf8 set case
 	if self.remainingSets > 0 {
 		self.remainingSets -= 1
 		if int(self.dataIndex) >= len(self.rule.Data) {
-			return RuneError, Utf8SetNone, rerules.ErrInvalidReRule
+			return RuneError, Utf8SetNone, rerules.InvalidUtf8RuleErr(self.rule)
 		}
 
 		set := Utf8SetIndex(self.rule.Data[self.dataIndex])
@@ -97,12 +95,12 @@ func (self *RuleScanner) Next() (rune, Utf8SetIndex, error) {
 	if self.remainingCodePoints > 0 {
 		self.remainingCodePoints -= 1
 		if int(self.dataIndex) + 3 >= len(self.rule.Data) {
-			return RuneError, Utf8SetNone, rerules.ErrInvalidReRule
+			return RuneError, Utf8SetNone, rerules.InvalidUtf8RuleErr(self.rule)
 		}
 
 		codePoint := rune(internal.DecodeUint32LE(self.rule.Data[self.dataIndex : ]))
 		if !IsValidRuleCodePoint(codePoint) {
-			return RuneError, Utf8SetNone, rerules.ErrInvalidReRule
+			return RuneError, Utf8SetNone, rerules.InvalidUtf8RuleErr(self.rule)
 		}
 		self.dataIndex += 4
 		if int(self.dataIndex) >= len(self.rule.Data) {
@@ -124,7 +122,7 @@ func (self *RuleScanner) advanceControl() error {
 	if self.remainingBlockElements == 0 { // new fragment
 		// safety check
 		if self.rule.Data[1 + int(self.block)] != self.accumulatedBlockCodePoints + self.accumulatedBlockSets {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 
 		var err error
@@ -141,24 +139,24 @@ func (self *RuleScanner) advanceControl() error {
 func (self *RuleScanner) parseFragmentControl() error {
 	ctrl := self.rule.Data[self.dataIndex]
 	self.dataIndex += 1
-	self.remainingSets   = (ctrl & 0b1111_0000) >> 4
+	self.remainingSets = (ctrl & 0b1111_0000) >> 4
 	self.remainingCodePoints = (ctrl & 0b0000_1111)
-	self.accumulatedBlockSets   += self.remainingSets
+	self.accumulatedBlockSets += self.remainingSets
 	self.accumulatedBlockCodePoints += self.remainingCodePoints
 	numElems := self.remainingSets + self.remainingCodePoints
 	if numElems == 0 {
 		if self.accumulatedBlockSets + self.accumulatedBlockCodePoints != self.rule.Data[1 + int(self.block)] {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 	} else {
 		if self.accumulatedBlockSets + self.accumulatedBlockCodePoints < self.accumulatedBlockSets {
-			return rerules.ErrInvalidReRule // ^ overflow
+			return rerules.InvalidUtf8RuleErr(self.rule) // ^ overflow
 		}
 		if self.accumulatedBlockSets + self.accumulatedBlockCodePoints > self.rule.Data[1 + int(self.block)] {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 		if numElems > self.remainingBlockElements {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 	}
 	
@@ -169,19 +167,19 @@ func (self *RuleScanner) parseFragmentControl() error {
 // Returns an error if the current point is not a valid termination point for the rule.
 func (self *RuleScanner) checkTermination() error {
 	if self.remainingSets > 0 || self.remainingCodePoints > 0 || self.remainingBlockElements > 0 {
-		return rerules.ErrInvalidReRule
+		return rerules.InvalidUtf8RuleErr(self.rule)
 	}
 
 	switch self.block {
 	case RuleHead:
-		return rerules.ErrInvalidReRule 
+		return rerules.InvalidUtf8RuleErr(self.rule)
 	case RuleBody:
 		if self.rule.Data[3] != 0 {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 	case RuleTail:
 		if self.rule.Data[3] != self.accumulatedBlockSets + self.accumulatedBlockCodePoints {
-			return rerules.ErrInvalidReRule
+			return rerules.InvalidUtf8RuleErr(self.rule)
 		}
 	default:
 		panic(BrokenCode)

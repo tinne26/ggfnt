@@ -16,9 +16,6 @@ var predefWords = [256]string{
 	"undefined",
 	"undefined",
 	"undefined",
-	"undefined",
-	"undefined",
-	"undefined",
 	
 	// seasons
 	"fall",
@@ -179,6 +176,9 @@ var predefWords = [256]string{
 	"thin",
 	"wide",
 	"thick",
+	"compact",
+	"spaced",
+	"loose",
 	"slim",
 	"hollow",
 	"inverted",

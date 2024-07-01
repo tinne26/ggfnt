@@ -203,3 +203,106 @@ func TestRuleScannerMustFail(t *testing.T) {
 		}
 	}
 }
+
+func TestRuleScannerSets(t *testing.T) {
+	var scanner RuleScanner
+
+	tests := []struct{
+		ReRuleDef []uint8 // glyph rewrite rule raw definition
+		HeadLen uint8
+		StartBlock RuleBlock
+		Condition uint8
+		NextGlyphs []ggfnt.GlyphIndex
+		NextSets []GlyphSetIndex
+	}{
+		{ // replace glyph if both head and tail satisfied
+			ReRuleDef: []uint8{
+				9, // condition
+				1, 1, 1, 1, // block and output lenghts
+				8, 0, // output
+				0b0001_0000, // head control
+				2, // head content
+				0b0000_0001, // body control
+				6, 0, // body content
+				0b0001_0000, // tail control
+				2, // tail content
+			},
+			HeadLen: 1,
+			StartBlock: RuleHead,
+			Condition: 9,
+			NextGlyphs: []ggfnt.GlyphIndex{GlyphNone, 6, GlyphNone},
+			NextSets: []GlyphSetIndex{2, GlyphSetNone, 2},
+		},
+		{ // replace glyph if both head and tail satisfied
+			ReRuleDef: []uint8{
+				6, // condition
+				0, 3, 0, 1, // block and output lenghts
+				4, 0, // output
+				0b0000_0000, // head control
+				0b0011_0000, // body control
+				2, 3, 4, // body content
+				0b0000_0000, // tail control
+			},
+			HeadLen: 0,
+			StartBlock: RuleBody,
+			Condition: 6,
+			NextGlyphs: []ggfnt.GlyphIndex{GlyphNone, GlyphNone, GlyphNone},
+			NextSets: []GlyphSetIndex{2, 3, 4},
+		},
+		{ // replace glyph if both head and tail satisfied
+			ReRuleDef: []uint8{
+				255, // condition
+				0, 1, 2, 1, // block and output lenghts
+				88, 0, // output
+				0b0000_0000, // head control
+				0b0000_0001, // body control
+				5, 0, // body content
+				0b0001_0001, // tail control
+				2, 3, 0,
+			},
+			HeadLen: 0,
+			StartBlock: RuleBody,
+			Condition: 255,
+			NextGlyphs: []ggfnt.GlyphIndex{5, GlyphNone, 3},
+			NextSets: []GlyphSetIndex{GlyphSetNone, 2, GlyphSetNone},
+		},
+	}
+
+	for n, test := range tests {
+		rule := ggfnt.GlyphRewriteRule{ Data: test.ReRuleDef }
+		err := scanner.Start(rule)
+		
+		if err != nil { t.Fatalf("t#%d unexpected start error: %s", n, err) }
+		if scanner.HeadLen() != test.HeadLen {
+			t.Fatalf("t#%d expected head length %d, got %d", n, test.HeadLen, scanner.HeadLen())
+		}
+	
+		if scanner.Block() != test.StartBlock {
+			t.Fatalf("t#%d expected start block %d, got %d", n, test.StartBlock, scanner.Block())
+		}
+	
+		if scanner.Condition() != test.Condition {
+			t.Fatalf("t#%d expected condition %d, got %d", n, test.Condition, scanner.Condition())
+		}
+		
+		for i := 0; i < len(test.NextGlyphs); i++ {
+			if !scanner.HasNext() {
+				t.Fatalf("t#%d expected scanner to have next character", n)
+			}
+			glyphIndex, glyphSet, err := scanner.Next()
+			if err != nil {
+				t.Fatalf("t#%d unexpected error on next#%d: %s", n, i, err)
+			}
+			if glyphIndex != test.NextGlyphs[i] {
+				t.Fatalf("t#%d expected glyph index %d, got %d instead", n, test.NextGlyphs[i], glyphIndex)
+			}
+			if glyphSet != test.NextSets[i] {
+				t.Fatalf("t#%d expected glyph set %d, got %d instead", n, test.NextSets[i], glyphSet)
+			}
+		}
+
+		if scanner.HasNext() {
+			t.Fatalf("t#%d expected rule end, but it keeps going", n)
+		}
+	}
+}

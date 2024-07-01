@@ -155,6 +155,12 @@ func TestTester(t *testing.T) {
 			}
 		}
 
+		// test resync
+		err := tester.Resync(font, settingsCache)
+		if err != nil {
+			t.Fatalf("unexpected resync error: %s", err)
+		}
+
 		for subtestIndex, subtest := range test.Tests {
 			outBuffer = outBuffer[ : 0]
 			var fn GlyphConfirmationFunc = func(glyphIndex ggfnt.GlyphIndex) {
@@ -162,6 +168,113 @@ func TestTester(t *testing.T) {
 			}
 
 			err := tester.BeginSequence(font, settingsCache)
+			if err != nil {
+				t.Fatalf("test#%d, subtest#%d, unexpected error on BeginSequence(): %s", testIndex, subtestIndex, err)
+			}
+
+			for i, glyphIndex := range subtest.Input {
+				err := tester.Feed(glyphIndex, fn)
+				if err != nil {
+					t.Fatalf("test#%d, subtest#%d, input %#v, glyph#%d | feed error: %s", testIndex, subtestIndex, subtest.Input, i, err)
+				}
+			}
+			tester.FinishSequence(fn)
+
+			if !slices.Equal(outBuffer, subtest.Output) {
+				t.Fatalf("test#%d, subtest#%d, input %#v, expected out %#v, got %#v", testIndex, subtestIndex, subtest.Input, subtest.Output, outBuffer)
+			}
+		}
+	}
+}
+
+func TestTesterSet(t *testing.T) {
+	var font ggfnt.Font
+	var settingsCache *ggfnt.SettingsCache
+
+	// hack the set 0 data into the font
+	font.Data = []byte{
+		1, // num glyph sets = 1
+		5, 0, // GlyphSetEndOffsets [NumGlyphSet]uint16
+		1, 0, 0, 3, 0, // 1 range, from 0 to 3, and no extra glyphs
+	}
+	numGlyphSets := font.Rewrites().NumGlyphSets()
+	if numGlyphSets != 1 {
+		t.Fatalf("expected numGlyphSets = 1, got %d", numGlyphSets)
+	}
+	set := font.Rewrites().GetGlyphSet(0)
+	if !slices.Equal(set.Data, []byte{1, 0, 0, 3, 0}) {
+		t.Fatalf("unxpected glyph set, got %v", set.Data)
+	}
+
+	// reused rules
+	ruleA := []uint8{
+		255, // condition
+		1, 1, 1, 1, // block and output lenghts
+		9, 0, // output
+		0b0001_0000, // head control
+		0, // head content (set 0)
+		0b0000_0001, // body control
+		8, 0, // body content
+		0b0001_0000, // tail control
+		0, // tail content (set 0 again)
+	}
+
+	// tests table
+	type inOut struct {
+		Input []ggfnt.GlyphIndex
+		Output []ggfnt.GlyphIndex
+	}
+
+	var tests = []struct{
+		Rules [][]uint8
+		Tests []inOut
+	}{
+		{ // first test
+			Rules: [][]uint8{ruleA},
+			Tests: []inOut{
+				{
+					Input: []ggfnt.GlyphIndex{56791}, // line-break like
+					Output: []ggfnt.GlyphIndex{56791},
+				},
+				{
+					Input: []ggfnt.GlyphIndex{0, 7, 0},
+					Output: []ggfnt.GlyphIndex{0, 7, 0},
+				},
+				{
+					Input: []ggfnt.GlyphIndex{0, 8, 0},
+					Output: []ggfnt.GlyphIndex{0, 9, 0},
+				},
+			},
+		},
+	}
+
+	// run tests
+	var tester Tester
+	var outBuffer []ggfnt.GlyphIndex
+	for testIndex, test := range tests {
+		tester.RemoveAllRules()
+		for i, ruleData := range test.Rules {
+			var rule ggfnt.GlyphRewriteRule
+			rule.Data = ruleData
+			err := tester.AddRule(rule)
+			if err != nil {
+				t.Fatalf("test#%d, on AddRule#%d: %s", testIndex, i, err)
+			}
+		}
+
+		// test resync
+		err := tester.Resync(&font, settingsCache)
+		if err != nil {
+			t.Fatalf("unexpected resync error: %s", err)
+		}
+
+		for subtestIndex, subtest := range test.Tests {
+			outBuffer = outBuffer[ : 0]
+			var fn GlyphConfirmationFunc = func(glyphIndex ggfnt.GlyphIndex) {
+				outBuffer = append(outBuffer, glyphIndex)
+			}
+
+			err := tester.BeginSequence(&font, settingsCache)
 			if err != nil {
 				t.Fatalf("test#%d, subtest#%d, unexpected error on BeginSequence(): %s", testIndex, subtestIndex, err)
 			}

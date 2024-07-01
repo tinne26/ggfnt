@@ -123,6 +123,11 @@ func (self *DecisionTreeCompiler) Feed(rule ggfnt.GlyphRewriteRule, index RuleIn
 					return self.states[state].AppendRange(glyphRange, matchRule, self.stateLinker)
 				})
 				if err != nil { return err }
+				err = set.EachListGlyph(func(glyphIndex ggfnt.GlyphIndex) error {
+					glyphRange := ggfnt.GlyphRange{ First: glyphIndex, Last: glyphIndex }
+					return self.states[state].AppendRange(glyphRange, matchRule, self.stateLinker)
+				})
+				if err != nil { return err }
 			}
 		}
 		
