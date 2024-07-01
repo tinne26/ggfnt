@@ -1,4 +1,5 @@
 # ggfnt
+[![Go Reference](https://pkg.go.dev/badge/tinne26/ggfnt.svg)](https://pkg.go.dev/github.com/tinne26/ggfnt)
 
 A bitmap font format that no one asked for:
 - Designed to be used primarily for indie game development.
