@@ -22,6 +22,27 @@ func (self *Font) GetFirstVerDate() ggfnt.Date { return self.firstVersionDate }
 func (self *Font) GetMajorVerDate() ggfnt.Date { return self.majorVersionDate }
 func (self *Font) GetMinorVerDate() ggfnt.Date { return self.minorVersionDate }
 
+var ErrInvalidDate = errors.New("invalid date")
+
+func (self *Font) SetFirstVerDate(date ggfnt.Date) error {
+	if !date.IsValid() { return ErrInvalidDate }
+	self.firstVersionDate = date
+	return nil
+	// TODO: global error checking method for dates consistency at the end
+}
+
+func (self *Font) SetMajorVerDate(date ggfnt.Date) error {
+	if !date.IsValid() { return ErrInvalidDate }
+	self.majorVersionDate = date
+	return nil
+}
+
+func (self *Font) SetMinorVerDate(date ggfnt.Date) error {
+	if !date.IsValid() { return ErrInvalidDate }
+	self.minorVersionDate = date
+	return nil
+}
+
 // Also updates the relevant dates.
 func (self *Font) RaiseMajorVersion() {
 	self.versionMajor += 1
@@ -36,6 +57,15 @@ func (self *Font) RaiseMinorVersion() {
 	self.versionMinor += 1
 	self.minorVersionDate = ggfnt.CurrentDate()
 }
+
+// Also updates the relevant dates.
+func (self *Font) SetVersion(major, minor uint16) {
+	self.versionMajor = major
+	self.versionMinor = minor
+	self.majorVersionDate = ggfnt.CurrentDate()
+	self.minorVersionDate = ggfnt.CurrentDate()
+}
+
 func (self *Font) GetName() string { return self.fontName }
 func (self *Font) SetName(name string) error {
 	if len(name) > 255 { return errors.New("font name can't exceed 255 bytes") }
@@ -80,9 +110,9 @@ func (self *Font) GetMetricsStatus() error {
 	if self.ascent == 0 { return errors.New("ascent must be strictly positive") }
 	if self.ascent <= self.extraAscent { return errors.New("ascent must be greater than extra ascent") }
 	if self.descent <= self.extraDescent { return errors.New("descent value must be greater than extra descent") }
-	if self.ascent < self.lowercaseAscent { return errors.New("ascent must be equal or greater than lowercase ascent") }
+	if self.ascent < self.midlineAscent { return errors.New("ascent must be equal or greater than midline ascent") }
 	if self.ascent < self.uppercaseAscent { return errors.New("ascent must be equal or greater than uppercase ascent") }
-	if self.lowercaseAscent > self.uppercaseAscent { return errors.New("lowercase ascent must be equal or greater than uppercase ascent") }
+	if self.midlineAscent > self.uppercaseAscent { return errors.New("midline ascent must be equal or greater than uppercase ascent") }
 	return nil
 }
 
@@ -101,14 +131,14 @@ func (self *Font) GetExtraAscent() uint8 { return self.extraAscent }
 func (self *Font) GetDescent() uint8 { return self.descent }
 func (self *Font) GetExtraDescent() uint8 { return self.extraDescent }
 func (self *Font) GetUppercaseAscent() uint8 { return self.uppercaseAscent } // aka cap height
-func (self *Font) GetLowercaseAscent() uint8 { return self.lowercaseAscent } // aka xheight
+func (self *Font) GetMidlineAscent() uint8 { return self.midlineAscent } // aka xheight
 
 // TODO: should I check for existing glyph collisions on any metrics that are set?
 func (self *Font) SetAscent(value uint8) { self.ascent = value }
 func (self *Font) SetExtraAscent(value uint8) { self.extraAscent = value }
 func (self *Font) SetDescent(value uint8) { self.descent = value }
 func (self *Font) SetExtraDescent(value uint8) { self.extraDescent = value }
-func (self *Font) SetLowercaseAscent(value uint8) { self.lowercaseAscent = value }
+func (self *Font) SetMidlineAscent(value uint8) { self.midlineAscent = value }
 func (self *Font) SetUppercaseAscent(value uint8) { self.uppercaseAscent = value }
 
 func (self *Font) GetHorzInterspacing() uint8 { return self.horzInterspacing }
@@ -266,3 +296,19 @@ func (self *Font) MapWithSwitch(codePoint rune, mapSwitch uint8, glyphUIDs [][]u
 func (self *Font) Unmap(codePoint rune) error {
 	panic("unimplemented")
 }
+
+// ---- kerning ----
+
+func (self *Font) SetKerningPair(uidPrev, uidNext uint64, kerning int8) {
+	if kerning == 0 {
+		delete(self.horzKerningPairs, [2]uint64{uidPrev, uidNext})
+	} else {
+		self.horzKerningPairs[[2]uint64{uidPrev, uidNext}] = &editionKerningPair{
+			First: uidPrev,
+			Second: uidNext,
+			Class: 0,
+			Value: kerning,
+		}
+	}
+}
+

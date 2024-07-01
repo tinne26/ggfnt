@@ -56,7 +56,7 @@ type Font struct {
 	descent uint8
 	extraDescent uint8
 	uppercaseAscent uint8
-	lowercaseAscent uint8
+	midlineAscent uint8
 	horzInterspacing uint8
 	vertInterspacing uint8
 	lineGap uint8
@@ -86,6 +86,10 @@ type Font struct {
 
 	// rewrite rules
 	rewriteConditions []rewriteCondition
+	rewriteGlyphSets map[uint64]reGlyphSet
+	rewriteRuneSets map[uint64]reRuneSet
+	glyphSetsOrder []uint64
+	runeSetsOrder []uint64
 	glyphRules []glyphRewriteRule
 	utf8Rules []utf8RewriteRule
 
@@ -136,7 +140,7 @@ func New() *Font {
 	builder.ascent = 9
 	builder.descent = 5
 	builder.uppercaseAscent = 9
-	builder.lowercaseAscent = 5
+	builder.midlineAscent = 5
 	builder.horzInterspacing = 1
 	builder.lineGap = 1
 	// (many omitted due to being 0)
@@ -225,7 +229,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	data = append(data, self.descent)
 	data = append(data, self.extraDescent)
 	data = append(data, self.uppercaseAscent)
-	data = append(data, self.lowercaseAscent)
+	data = append(data, self.midlineAscent)
 	data = append(data, self.horzInterspacing)
 	data = append(data, self.vertInterspacing)
 	data = append(data, self.lineGap)
@@ -301,8 +305,8 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	if numNamedGlyphs > 0 {
 		// sort glyph uids by name
 		slices.SortFunc(self.tempSortingBuffer, func(a, b uint64) int {
-			nameA := self.glyphData[self.tempSortingBuffer[a]].Name
-			nameB := self.glyphData[self.tempSortingBuffer[b]].Name
+			nameA := self.glyphData[a].Name
+			nameB := self.glyphData[b].Name
 			if nameA < nameB { return -1 }
 			if nameA > nameB { return  1 }
 			return 0
@@ -444,7 +448,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		// gather all code points and sort
 		self.tempSortingBuffer = self.tempSortingBuffer[ : 0]
 		for codePoint, _ := range self.runeMapping {
-			if codePoint < 0 || codePoint >= ggfnt.MaxGlyphs { panic(invalidInternalState) }
+			if codePoint < 0 { panic(invalidInternalState) }
 			self.tempSortingBuffer = append(self.tempSortingBuffer, uint64(uint32(codePoint)))
 		}
 		slices.Sort(self.tempSortingBuffer)
@@ -505,11 +509,41 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 
 	// rewrite sets
 	font.OffsetToRewriteUtf8Sets = uint32(len(data))
+	var runeSetsMap = make(map[uint64]uint8)
 	data = append(data, 0) // NumUtf8Sets
 	// ... (TODO)
+	if len(self.rewriteRuneSets) > 0 {
+		panic("rune sets encoding unimplemented")
+	}
+	
+	if len(self.rewriteGlyphSets) > 255 { panic(invalidInternalState) }
+	if len(self.rewriteGlyphSets) != len(self.glyphSetsOrder) { panic(invalidInternalState) }
+	numGlyphSets := uint8(len(self.rewriteGlyphSets))
 	font.OffsetToRewriteGlyphSets = uint32(len(data))
-	data = append(data, 0) // NumGlyphSets
-	// ... (TODO)
+	data = append(data, numGlyphSets) // NumGlyphSets
+	var glyphSetsMap = make(map[uint64]uint8)
+	if len(self.rewriteGlyphSets) > 0 {
+		
+		// GlyphSetEndOffsets
+		var offset uint32
+		for index, setUID := range self.glyphSetsOrder {
+			glyphSetsMap[setUID] = uint8(index)
+			set, found := self.rewriteGlyphSets[setUID]
+			if !found { panic(invalidInternalState) }
+			offset += set.GetSize()
+			if offset > 65535 {
+				return nil, errors.New("rewrite glyph sets contain too much data (can't exceed 65535 bytes)")
+			}
+			data = internal.AppendUint16LE(data, uint16(offset))
+		}
+
+		// GlyphSets
+		for _, setUID := range self.glyphSetsOrder {
+			set := self.rewriteGlyphSets[setUID]
+			data, err = set.AppendTo(data, self.tempGlyphIndexLookup)
+			if err != nil { return nil, err }
+		}
+	}
 	
 	// utf8 rules
 	if len(self.utf8Rules) > 65535 { panic(invalidInternalState) }
@@ -517,22 +551,21 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	numUtf8Rules := uint16(len(self.utf8Rules))
 	data = internal.AppendUint16LE(data, numUtf8Rules) // NumUTF8Rules
 	if numUtf8Rules > 0 {
-		// UTF8RuleEndOffsets
-		var offset uint32
+		// pad for offsets
+		data = internal.GrowSliceByN(data, int(numUtf8Rules)*3)
+
+		// UTF8Rules and UTF8RuleEndOffsets
+		baseRulesIndex := len(data)
 		for i, _ := range self.utf8Rules {
-			seqLen := len(self.utf8Rules[i].sequence)
-			if seqLen > 255 { panic(invalidInternalState) }
-			if seqLen < 1 { panic(invalidInternalState) }
-			offset += (uint32(seqLen) << 2) + 6
+			var err error
+			data, err = self.utf8Rules[i].AppendTo(data, runeSetsMap)
+			if err != nil { return nil, err }
+			offset := uint32(len(data) - baseRulesIndex)
 			if offset > 16777215 {
 				return nil, errors.New("utf8 rewrite rules exceed maximum allowed size of 16MiB")
 			}
-			data = internal.AppendUint24LE(data, offset)
-		}
-
-		// UTF8Rules
-		for i, _ := range self.utf8Rules {
-			data = self.utf8Rules[i].AppendTo(data)
+			offsetIndex := font.OffsetToUtf8Rewrites + 2 + uint32(i)*3
+			internal.EncodeUint24LE(data[offsetIndex : offsetIndex + 3], offset)
 		}
 	}
 
@@ -542,22 +575,21 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	numGlyphRules := uint16(len(self.glyphRules))
 	data = internal.AppendUint16LE(data, numGlyphRules) // NumGlyphRules
 	if numGlyphRules > 0 {
-		// GlyphRuleEndOffsets
-		var offset uint32
+		// pad for offsets
+		data = internal.GrowSliceByN(data, int(numGlyphRules)*3)
+
+		// GlyphRuless and GlyphRuleEndOffsets
+		baseRulesIndex := len(data)
 		for i, _ := range self.glyphRules {
-			seqLen := len(self.glyphRules[i].sequence)
-			if seqLen > 255 { panic(invalidInternalState) }
-			if seqLen < 1 { panic(invalidInternalState) }
-			offset += (uint32(seqLen) << 1) + 4
+			var err error
+			data, err = self.glyphRules[i].AppendTo(data, glyphSetsMap, self.tempGlyphIndexLookup)
+			if err != nil { return nil, err }
+			offset := uint32(len(data) - baseRulesIndex)
 			if offset > 16777215 {
 				return nil, errors.New("glyph rewrite rules exceed maximum allowed size of 16MiB")
 			}
-			data = internal.AppendUint24LE(data, offset)
-		}
-
-		// GlyphRules
-		for i, _ := range self.glyphRules {
-			data = self.glyphRules[i].AppendTo(data, self.tempGlyphIndexLookup)
+			offsetIndex := font.OffsetToGlyphRewrites + 2 + uint32(i)*3
+			internal.EncodeUint24LE(data[offsetIndex : offsetIndex + 3], offset)
 		}
 	}
 
