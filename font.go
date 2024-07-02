@@ -621,7 +621,7 @@ type GlyphMappingGroup struct {
 }
 func (self *GlyphMappingGroup) Size() uint8 {
 	if self.directMapping { return 1 }
-	size := self.font.Data[self.offset + 0]
+	size := (0b0111_1111 & self.font.Data[self.offset + 0]) + 1
 	if size == 0 { panic(invalidFontData) } // discretionary assertion
 	return size
 }
@@ -642,10 +642,15 @@ func (self *GlyphMappingGroup) Select(choice uint8) GlyphIndex {
 	}
 
 	// general case
-	size := self.font.Data[self.offset + 0]
-	if size == 0 { panic(invalidFontData) }
+	info := self.font.Data[self.offset + 0]
+	size := (info & 0b0111_1111) + 1
 	if choice >= size { panic("choice outside valid range") } // discretionary assertion
-	return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 + (uint32(choice) << 2) : ]))
+
+	if (info & 0b1000_0000) != 0 { // range case
+		return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 : ]) + uint16(choice))
+	} else {
+		return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 + (uint32(choice) << 2) : ]))
+	}
 }
 
 type FontMapping Font
@@ -722,7 +727,7 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	if endOffset <= startOffset { panic(invalidFontData) }
 	offsetToMappingData := offsetToMappingEndOffsets + int(numEntries) + (int(numEntries) << 1)
 	switchType := self.Data[offsetToMappingData + int(startOffset)]
-	startOffset += 1
+	startOffset += 1 // move from switch type offset index to actual data
 	
 	// basic case: inconditional mapping
 	if switchType == 255 {
@@ -731,12 +736,19 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	}
 	
 	// general case: switch staircase
-	targetSwitchCase := self.EvaluateSwitch(switchType, settings)
+	var targetSwitchCase uint8
+	if switchType != 254 {
+		targetSwitchCase = self.EvaluateSwitch(switchType, settings)
+	}
 	group := GlyphMappingGroup{ font: (*Font)(self), caseBranch: targetSwitchCase }
 	for targetSwitchCase > 0 {
 		groupSize := self.Data[offsetToMappingData + int(startOffset)]
-		if groupSize == 0 { panic(invalidFontData) } // discretionary assertion
-		startOffset += 2 + (uint32(groupSize) << 1) // skip group size, animation flags, and then the whole group
+		groupDefinedAsRange := ((groupSize & 0b1000_0000) != 0)
+		if groupDefinedAsRange {
+			startOffset += 4 // 1 byte group size, 1 byte anim flags, 2 bytes base glyph
+		} else {
+			startOffset += 2 + (uint32(groupSize + 1) << 1)
+		}
 		targetSwitchCase -= 1
 		if startOffset >= endOffset { panic(invalidFontData) } // discretionary assertion
 	}

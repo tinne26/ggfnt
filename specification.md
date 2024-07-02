@@ -224,7 +224,7 @@ To see the worlds already defined, check [the source code]().
 Every font needs a mapping section in order to indicate which glyph indices correspond to each unicode code point.
 
 ```Golang
-NumMappingSwitches uint8
+NumMappingSwitches uint8 // can't exceed 254
 MappingSwitchEndOffsets [NumMappingSwitches]uint16
 MappingSwitches blob[...]
 
@@ -234,17 +234,16 @@ MappingEndOffsets [NumMappingEntries]uint24
 Mappings blob[...]
 ```
 
-Each entry of mapping data consists of a switch. The first byte is the switch type (255 if inconditional mapping is used). If any other switch type is used, we have a sequence of glyph groups with one or more glyph indices. Glyph groups are defined as follows:
-- Total group size as `uint8`. Can't be 0. Can't exceed 128.
+Each entry of mapping data consists of a switch. The first byte is the switch type (255 if inconditional mapping is used). If any other switch type is used, we have a sequence of glyph groups with one or more glyph indices. 254 is reserved for a single group without settings. Glyph groups are defined as follows:
+- Total group size as `uint8`. If the top bit is 1, the group is a range, otherwise it's a list of individual glyphs. The remaining 0x0XXX_XXXX bits indicate the group size - 1 (so, 0 is 1, 1 is 2, etc).
 - If group size > 1, we have one byte indicating the group's animation characteristics:
 	- 0b0000_0001: loopable. The animation can wrap back to the start after reaching the end.
 	- 0b0000_0010: sequential. The animation should always be played sequentially from start to end or backwards.
-	- ob0000_0100: terminal. The animation represents a vanishing or destructive sequence that shouldn't be automatically rewinded or replayed.
+	- 0b0000_0100: terminal. The animation represents a vanishing or destructive sequence that shouldn't be automatically rewinded or replayed.
 	- 0b0000_1000: split. The animation is composed of independent fragments that the animation can be stopped at. A split animation should never be sequential, but a non-sequential animation is not always necessarily split.
-	- 0bXXX0_0000: the animation class index. Still undefined. (TODO). discretionary use by the font creator? Maybe leave as custom class flags instead. Like UI vs Char and so on.
-- 0bXYYY_YYYY: the Y's indicate the subgroup size - 1 (zero doesn't exist). If X is 1, the subgroup is consecutive, so only the first index is indicated. Otherwise, all indices are explicitly provided. Multiple subgroups might be used to reduce memory footprint of consecutive sequences, but too many subgroups will also increase the cost of finding and operating switch cases.
+	- 0bXXXX_0000: the animation class index. Still undefined. (TODO). discretionary use by the font creator? Maybe leave as custom class flags instead. Like UI vs Char and so on.
 
-Switches are defined as lists of settings. Based on the amount of combinations and their possible values, we have an exhaustive switch, indexed from 0...N, where N can't be higher than 255. Implementers should cache recent 'code point to glyph index set' results. Going through switch cases is slow, as we need to advance linearly; this is why caching is considered important in this context.
+Switches are defined as lists of settings. Based on the amount of combinations and their possible values, we have an exhaustive switch, indexed from 0...N, where N can't be higher than 253. Implementers should cache recent 'code point to glyph index set' results. Going through switch cases is slow, as we need to advance linearly; this is why caching is considered important in this context.
 
 Mapping to a set of glyph indices and using switches can be useful for a number of features:
 - Stylistic alternates. This can include randomized variations, dialectal glyph variations (for game flavor mostly), conditional font glyph stylizations, etc.

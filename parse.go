@@ -259,6 +259,9 @@ func Parse(reader io.Reader) (*Font, error) {
 	font.OffsetToMappingSwitches = uint32(parser.Index)
 	numMappingSwitches, err := parser.ReadUint8()
 	if err != nil { return &font, err }
+	if numMappingSwitches > 253 {
+		return &font, parser.NewError("NumMappingSwitches can't exceed 254 (both 254 and 255 are reserved)")
+	}
 	if numMappingSwitches > 0 {
 		// advance MappingSwitchEndOffsets - 1
 		err = parser.AdvanceBytes(int(numMappingSwitches - 1)*2)

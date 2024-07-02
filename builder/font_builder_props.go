@@ -184,7 +184,6 @@ func (self *Font) AddGlyph(glyphMask *image.Alpha) (uint64, error) {
 	rect := mask.ComputeRect(glyphMask)
 	if !rect.Empty() {
 		if rect.Min.Y < 0 && -rect.Min.Y > int(self.ascent) + int(self.extraAscent) {
-			fmt.Printf("rect: %v, ascent: %d, extraAscent: %d\n", rect, self.ascent, self.extraAscent)
 			return 0, errors.New("glyph exceeds font ascent")
 		}
 		if rect.Max.Y > 0 && rect.Max.Y > int(self.descent) + int(self.extraDescent) {
@@ -265,23 +264,56 @@ func (self *Font) GetMappingSwitchSettings(index uint8) []uint8 {
 	panic("unimplemented")
 }
 
-func (self *Font) Map(codePoint rune, glyphUIDs ...uint64) error {
+// TODO: this can't work like this. we need animation flags for mapping groups.
+//       First we do it for mode 254, and later for all other modes.
+func (self *Font) Map(codePoint rune, glyphUID uint64) error {
 	// validation
 	if codePoint < ' ' {
 		return errors.New("can't map code points before ' ' (space)") 
 	}
+	_, hasData := self.glyphData[glyphUID]
+	if !hasData {
+		return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
+	}
+
+	// actual addition
+	self.runeMapping[codePoint] = mappingEntry{
+		SwitchType: 255,
+		SwitchCases: []mappingGroup{ mappingGroup{ Glyphs: []uint64{glyphUID} } },
+	}
+	return nil
+}
+
+func (self *Font) MapGroup(codePoint rune, animFlags ggfnt.AnimationFlags, glyphUIDs ...uint64) error {
+	// basic validation
+	if codePoint < ' ' {
+		return errors.New("can't map code points before ' ' (space)") 
+	}
+	if len(glyphUIDs) < 2 {
+		return errors.New("mapping a glyph group to a code point requires at least 2 glyphs")
+	}
+	if len(glyphUIDs) > 127 {
+		return errors.New("glyph groups can't exceed 127 glyphs")
+	}
+
+	// glyph UIDs validation
+	err := self.validateMapGlyphs(codePoint, glyphUIDs...)
+	if err != nil { return err }
+
+	// actual addition
+	self.runeMapping[codePoint] = mappingEntry{
+		SwitchType: 254,
+		SwitchCases: []mappingGroup{ mappingGroup{ Glyphs: glyphUIDs, AnimationFlags: animFlags } },
+	}
+	return nil
+}
+
+func (self *Font) validateMapGlyphs(codePoint rune, glyphUIDs ...uint64) error {
 	for _, glyphUID := range glyphUIDs {
 		_, hasData := self.glyphData[glyphUID]
 		if !hasData {
 			return errors.New("attempted to map '" + string(codePoint) + "' to an undefined glyph")
 		}
-	}
-
-	// actual addition
-	// TODO: would need more validation, no more than 64 UIDs or whatever?
-	self.runeMapping[codePoint] = mappingEntry{
-		SwitchType: 255,
-		SwitchCases: []mappingGroup{ mappingGroup{ Glyphs: glyphUIDs } },
 	}
 	return nil
 }

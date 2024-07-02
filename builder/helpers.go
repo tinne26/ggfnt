@@ -1,5 +1,7 @@
 package builder
 
+const brokenCode = "broken code"
+
 func startsWith(definition string, start, end int, expr string) bool {
 	if start < 0 || end + 1 > len(definition) { panic("broken code usage") }
 	if len(expr) > (end + 1 - start) { return false }
@@ -27,6 +29,17 @@ func trimSpaces(definition string, start, end int) (int, int) {
 	}
 
 	return start, end
+}
+
+type integer interface { uint8 | uint16 | uint32 | uint64 | int8 | int16 | int32 | int64 }
+func isContinuousSlice[T integer](slice []T) bool {
+	if len(slice) == 0 { return true }
+	for i := 1; i < len(slice); i++ {
+		if slice[i] != slice[i - 1] + 1 {
+			return false
+		}
+	}
+	return true
 }
 
 type boolList struct {

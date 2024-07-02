@@ -463,6 +463,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 		data = internal.GrowSliceByN(data, int(numMappingEntries)*3)
 		
 		// append Mappings
+		var scratchBuffer []uint16 // TODO: not very efficient
 		var offset int = 0
 		for _, codePoint := range self.tempSortingBuffer {
 			mapping := self.runeMapping[int32(uint32(codePoint))]
@@ -474,7 +475,7 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 			// append mapping data
 			preLen := len(data)
 			var err error
-			data, self.tempSortingBuffer, err = mapping.AppendTo(data, self.tempGlyphIndexLookup, self.tempSortingBuffer)
+			data, scratchBuffer, err = mapping.AppendTo(data, self.tempGlyphIndexLookup, scratchBuffer)
 			if err != nil { return nil, err }
 			offset += len(data) - preLen
 
@@ -836,7 +837,7 @@ func (self *Font) ValidateEditionData() error {
 
 func (self *Font) computeNumSwitchCases(switchIndex uint8) int {
 	// base special case
-	if switchIndex == 255 { return 1 }
+	if switchIndex >= 254 { return 1 }
 
 	// general case
 	var numCases int
