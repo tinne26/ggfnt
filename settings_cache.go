@@ -1,5 +1,7 @@
 package ggfnt
 
+import "github.com/tinne26/ggfnt/internal"
+
 // TODO:
 // - say we have a setting for filled/unfilled glyphs. maybe we want to use that
 //   dynamically as an animation form instead. it would be great to allow *not
@@ -8,39 +10,44 @@ package ggfnt
 //   transition between filled and unfilled, which would be cool.
 
 type SettingsCache struct {
-	mappingSettingRelevanceFlags []uint8 // compressed bool slice
-	rewriteConditionsSettingRelevanceFlags []uint8 // compressed bool slice
-	mappingCaseCachingFlags []uint8 // compressed bool slice
-	rewriteConditionsCachingFlags []uint8 // compressed bool slice
+	// relevance flags indicate which settings can affect 
+	// regular glyph mapping and rewrite rules
+	mappingSettingRelevanceFlags internal.BoolList
+	rewriteConditionsSettingRelevanceFlags internal.BoolList
+
+	// caching flags
+	mappingCaseCachingFlags internal.BoolList
+	rewriteConditionsCachingFlags internal.BoolList
+
+	// cached values
 	mappingCachedCases []uint8
-	rewriteConditionsCachedBools []uint8 // compressed bool slice
+	rewriteConditionsCachedBools internal.BoolList
+
+	// actual settings
 	settings []uint8 // reference to current settings
 }
 
 func NewSettingsCache(font *Font) *SettingsCache {
 	var cache SettingsCache
 	
-	numSettings := font.Settings().Count()
-	if numSettings > 0 {
-		requiredBytes := (int(numSettings) + 7) >> 3
-		cache.mappingSettingRelevanceFlags = make([]uint8, requiredBytes)
-		cache.rewriteConditionsSettingRelevanceFlags = make([]uint8, requiredBytes)
-	}
+	numSettings := int(font.Settings().Count())
+	cache.settings = make([]uint8, numSettings)
+	cache.mappingSettingRelevanceFlags = internal.NewBoolList(numSettings)
+	cache.rewriteConditionsSettingRelevanceFlags = internal.NewBoolList(numSettings)
+	cache.mappingSettingRelevanceFlags.SetAllTrue()
+	cache.rewriteConditionsSettingRelevanceFlags.SetAllTrue()
 	
-	numSwitchTypes := font.Mapping().NumSwitchTypes()
-	if numSwitchTypes > 0 {
-		cache.mappingCaseCachingFlags = make([]uint8, (int(numSwitchTypes) + 7) >> 3)
-		cache.mappingCachedCases = make([]uint8, int(numSwitchTypes))
-	}
+	numSwitchTypes := int(font.Mapping().NumSwitchTypes())
+	cache.mappingCaseCachingFlags = internal.NewBoolList(numSwitchTypes)
+	cache.mappingCachedCases = make([]uint8, numSwitchTypes)
 
-	numConditions := font.Rewrites().NumConditions()
-	if numConditions > 0 {
-		requiredBytes := (int(numConditions) + 7 >> 3)
-		cache.rewriteConditionsCachingFlags = make([]uint8, requiredBytes)
-		cache.rewriteConditionsCachedBools = make([]uint8, requiredBytes)
-	}
+	numConditions := int(font.Rewrites().NumConditions())
+	cache.rewriteConditionsCachingFlags = internal.NewBoolList(numConditions)
+	cache.rewriteConditionsCachedBools = internal.NewBoolList(numConditions)
 
-	// TODO: gotta scan a lot of stuff to determine relevance flags
+	// TODO: need to see if I can set relevance flags for rewrite rules and
+	//       mapping conditions more precisely in a reasonable way than just
+	//       SetAllTrue().
 
 	return &cache
 }
@@ -58,17 +65,14 @@ func (self *SettingsCache) Get(key SettingKey) uint8 {
 // Returns two bools for mappings and rewrite conditions affected.
 func (self *SettingsCache) Set(key SettingKey, option uint8) (mappingsAffected, rewriteConditionsAffected bool) {
 	self.settings[key] = option
-	wordIndex, bit := self.wordAndBit(uint8(key))
 	
 	// if setting is used for at least one switch/condition, drop cached values
-	flags := self.mappingSettingRelevanceFlags[wordIndex]
-	if flags & bit != 0 {
-		clear(self.mappingCaseCachingFlags) // this is fast. 255 switches are 32 bytes, 4 64bit words
+	if self.mappingSettingRelevanceFlags.Get(int(key)) {
+		self.mappingCaseCachingFlags.SetAllFalse()
 		mappingsAffected = true
 	}
-	flags  = self.rewriteConditionsSettingRelevanceFlags[wordIndex]
-	if flags & bit != 0 {
-		clear(self.rewriteConditionsCachingFlags)
+	if self.rewriteConditionsSettingRelevanceFlags.Get(int(key)) {
+		self.rewriteConditionsCachingFlags.SetAllFalse()
 		rewriteConditionsAffected = true
 	}
 
@@ -78,15 +82,13 @@ func (self *SettingsCache) Set(key SettingKey, option uint8) (mappingsAffected, 
 // First uint8 is the case value, second bool is case being cached or
 // not. If not cached, the first result must be ignored.
 func (self *SettingsCache) GetMappingCase(switchTypeIndex uint8) (uint8, bool) {
-	if switchTypeIndex == 255 { return 0, true } // default case
-	wordIndex, bit := self.wordAndBit(switchTypeIndex)
-	if self.mappingCaseCachingFlags[wordIndex] & bit == 0 { return 0, false }
+	if switchTypeIndex >= 254 { return 0, true } // default cases
+	if self.mappingCaseCachingFlags.IsUnsetU8(switchTypeIndex) { return 0, false }
 	return self.mappingCachedCases[switchTypeIndex], true
 }
 
 func (self *SettingsCache) CacheMappingCase(switchTypeIndex uint8, result uint8) {
-	wordIndex, bit := self.wordAndBit(switchTypeIndex)
-	self.mappingCaseCachingFlags[wordIndex] |= bit
+	self.mappingCaseCachingFlags.SetU8(switchTypeIndex, true)
 	self.mappingCachedCases[switchTypeIndex] = result
 }
 
@@ -95,21 +97,11 @@ func (self *SettingsCache) CacheMappingCase(switchTypeIndex uint8, result uint8)
 // be ignored.
 func (self *SettingsCache) GetRewriteCondition(conditionIndex uint8) (bool, bool) {
 	if conditionIndex == 255 { return true, true } // default case
-	wordIndex, bit := self.wordAndBit(conditionIndex)
-	if self.rewriteConditionsCachingFlags[wordIndex] & bit == 0 { return false, false }
-	return (self.rewriteConditionsCachedBools[wordIndex] & bit) != 0, true
+	if self.rewriteConditionsCachingFlags.IsUnsetU8(conditionIndex) { return false, false }
+	return self.rewriteConditionsCachedBools.IsSetU8(conditionIndex), true
 }
 
 func (self *SettingsCache) CacheRewriteCondition(conditionIndex uint8, satisfied bool) {
-	wordIndex, bit := self.wordAndBit(conditionIndex)
-	self.rewriteConditionsCachingFlags[wordIndex] |= bit
-	if satisfied {
-		self.rewriteConditionsCachedBools[wordIndex] |= bit
-	} else {
-		self.rewriteConditionsCachedBools[wordIndex] &= ^bit
-	}
-}
-
-func (self *SettingsCache) wordAndBit(index uint8) (uint8, uint8) {
-	return index >> 3, index & 0b111
+	self.rewriteConditionsCachingFlags.SetU8(conditionIndex, true)
+	self.rewriteConditionsCachedBools.SetU8(conditionIndex, satisfied)
 }

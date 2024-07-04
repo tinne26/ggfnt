@@ -227,3 +227,81 @@ func AppendByteDigits(value byte, str []byte) []byte {
 	return append(str, (value % 10) + '0')
 }
 
+type BoolList struct {
+	size int
+	bools []uint8
+}
+
+func NewBoolList(size int) BoolList {
+	if size <= 0 { return BoolList{} }
+	return BoolList{
+		size: size,
+		bools: make([]uint8, (size + 7) >> 3),
+	}
+}
+
+func (self *BoolList) Push(value bool) {
+	if (self.size >> 3) >= len(self.bools) {
+		self.bools = append(self.bools, 0)
+	}
+	self.size += 1
+	self.Set(self.size - 1, value)
+}
+
+func (self *BoolList) SetAllFalse() {
+	for i, _ := range self.bools {
+		self.bools[i] = 0
+	}
+}
+
+func (self *BoolList) SetAllTrue() {
+	for i, _ := range self.bools {
+		self.bools[i] = 0b1111_1111
+	}
+}
+
+func (self *BoolList) IsSet(i int) bool { return self.Get(i) }
+func (self *BoolList) IsUnset(i int) bool { return !self.Get(i) }
+
+func (self *BoolList) Get(i int) bool {
+	if i < 0 || i >= self.size { panic("out of bounds") }
+	bitMask := uint8(0b0000_00001) << uint8(i & 0b111)
+	return (self.bools[i >> 3] & bitMask) != 0
+}
+
+func (self *BoolList) IsSetU8(i uint8) bool { return self.GetU8(i) }
+func (self *BoolList) IsUnsetU8(i uint8) bool { return !self.GetU8(i) }
+
+func (self *BoolList) GetU8(i uint8) bool {
+	bitMask := uint8(0b0000_00001) << (i & 0b111)
+	return (self.bools[i >> 3] & bitMask) != 0
+}
+
+func (self *BoolList) Set(i int, value bool) {
+	if i < 0 || i >= self.size { panic("out of bounds") }
+	bitMask := uint8(0b0000_00001) << uint8(i & 0b111)
+	if value {
+		self.bools[i >> 3] |= bitMask
+	} else {
+		self.bools[i >> 3] &= ^bitMask
+	}
+}
+
+func (self *BoolList) SetU8(i uint8, value bool) {
+	bitMask := uint8(0b0000_00001) << (i & 0b111)
+	if value {
+		self.bools[i >> 3] |= bitMask
+	} else {
+		self.bools[i >> 3] &= ^bitMask
+	}
+}
+
+func (self *BoolList) RawGetU8(word, bitMask uint8) bool {
+	return (self.bools[word] & bitMask) != 0
+}
+
+func (self *BoolList) GetWordAndBitMaskU8(i uint8) (uint8, uint8) {
+	byteIndex := (i >> 3)
+	bitMask   := uint8(0b0000_00001 << (i & 0b111))
+	return byteIndex, bitMask
+}

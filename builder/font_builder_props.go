@@ -318,11 +318,71 @@ func (self *Font) validateMapGlyphs(codePoint rune, glyphUIDs ...uint64) error {
 	return nil
 }
 
+func (self *Font) MapWithSwitchSingles(codePoint rune, mapSwitch uint8, glyphUIDs ...uint64) error {
+	// basic validation
+	if codePoint < ' ' {
+		return errors.New("can't map code points before ' ' (space)")
+	}
+	if mapSwitch >= 254 {
+		panic("MapWithSwitch expects a map switch < 254")
+	}
+	if int(mapSwitch) >= len(self.mappingSwitches) {
+		return errors.New("can't map with undefined switch")
+	}
+	numSwitchCases := self.computeNumSwitchCases(mapSwitch)
+	if len(glyphUIDs) != numSwitchCases {
+		return fmt.Errorf("switch %d expects %d glyph groups, but received %d", mapSwitch, numSwitchCases, len(glyphUIDs))
+	}
+	
+	cases := make([]mappingGroup, 0, len(glyphUIDs))
+	for _, glyphUID := range glyphUIDs {
+		cases = append(cases, mappingGroup{ Glyphs: []uint64{glyphUID}, AnimationFlags: 0 })
+	}
+	self.runeMapping[codePoint] = mappingEntry{
+		SwitchType: mapSwitch,
+		SwitchCases: cases,
+	}
+	return nil
+}
+
 // TODO: I also need removal, edit (modify) and get. messy.
-func (self *Font) MapWithSwitch(codePoint rune, mapSwitch uint8, glyphUIDs [][]uint64) error {
-	// self.mappingSwitches[switchIndex]
-	// self.computeNumSwitchCases(switchIndex uint8) int
-	panic("unimplemented")
+func (self *Font) MapWithSwitch(codePoint rune, mapSwitch uint8, glyphUIDs [][]uint64, animFlags []ggfnt.AnimationFlags) error {
+	// basic validation
+	if codePoint < ' ' {
+		return errors.New("can't map code points before ' ' (space)")
+	}
+	if mapSwitch >= 254 {
+		panic("MapWithSwitch expects a map switch < 254")
+	}
+	if int(mapSwitch) >= len(self.mappingSwitches) {
+		return errors.New("can't map with undefined switch")
+	}
+	numSwitchCases := self.computeNumSwitchCases(mapSwitch)
+	if len(glyphUIDs) != numSwitchCases {
+		return fmt.Errorf("switch %d expects %d glyph groups, but received %d", mapSwitch, numSwitchCases, len(glyphUIDs))
+	}
+	finalAnimFlags := make([]ggfnt.AnimationFlags, 0, len(glyphUIDs))
+	animFlagIndex := 0
+	for _, group := range glyphUIDs {
+		if len(group) == 0 { panic("glyph groups can't be empty") }
+		if len(group) == 1 { continue }
+		if len(animFlags) <= animFlagIndex { return errors.New("not enough animation flags for all multi-glyph groups") }
+		finalAnimFlags = append(finalAnimFlags, animFlags[animFlagIndex])
+		animFlagIndex += 1
+	}
+	if animFlagIndex != len(animFlags) {
+		return errors.New("number of animation flags doesn't match number of multi-glyph groups")
+	}
+	
+	cases := make([]mappingGroup, 0, len(glyphUIDs))
+	for i, group := range glyphUIDs {
+		cases = append(cases, mappingGroup{ Glyphs: group, AnimationFlags: finalAnimFlags[i] })
+	}
+	self.runeMapping[codePoint] = mappingEntry{
+		SwitchType: mapSwitch,
+		SwitchCases: cases,
+	}
+	return nil
 }
 
 func (self *Font) Unmap(codePoint rune) error {
@@ -343,4 +403,3 @@ func (self *Font) SetKerningPair(uidPrev, uidNext uint64, kerning int8) {
 		}
 	}
 }
-

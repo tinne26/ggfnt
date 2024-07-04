@@ -1,6 +1,14 @@
 package ggfnt
 
 // TODO: unimplemented, and needs new strategy, tests, etc.
+// NOTE: actually, it's unclear what I'm doing here. I can
+//       cache offsets to cached conditions, but those aren't
+//       even super expensive to iterate right away in most
+//       cases, so I have to be careful, because a naive approach
+//       might actually end up making things more expensive
+//       instead.
+// Do we need every code point mapped? Or only the ones that
+// have <254 conditions and cases?
 
 const noEntry uint32 = 0xFFFF_FFFF
 
@@ -12,8 +20,8 @@ type mappingEntry struct {
 }
 
 // Glyph mapping cache. These are recommended to be used at small sizes,
-// like 256. In general, a glyph mapping cache is not even critical for
-// operation unless the font has multiple variables affecting mapping,
+// like 192. In general, a glyph mapping cache is not even critical for
+// operation unless the font has multiple settings affecting mapping,
 // animations and so on. In those cases, the mapping can get more expensive,
 // and using a mapping cache can be quite beneficial.
 type MappingCache struct {

@@ -207,13 +207,16 @@ func Parse(reader io.Reader) (*Font, error) {
 		if err != nil { return &font, err }
 		wordsLen, err := parser.ReadUint16()
 		if err != nil { return &font, err }
-
 		if wordsLen < uint16(numWords) {
 			return &font, parser.NewError("WordEndOffsets declares Words to end before allowed")
 		}
 		if int(wordsLen) > int(numWords)*32 {
 			return &font, parser.NewError("WordEndOffsets declares Words to end beyond allowed")
 		}
+
+		// skip Words
+		err = parser.AdvanceBytes(int(wordsLen))
+		if err != nil { return &font, err }
 	}
 	
 	font.OffsetToSettingNames = uint32(parser.Index)

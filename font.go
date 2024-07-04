@@ -566,6 +566,29 @@ type SettingKey uint8
 // Settings can't be modified on the [*Font] object itself, that
 // kind of state must be managed by a renderer or similar.
 type FontSettings Font
+
+func (self *FontSettings) NumWords() uint8 {
+	return self.Data[self.OffsetToWords + 0]
+}
+
+func (self *FontSettings) GetWord(index uint8) string {
+	numWords := self.NumWords()
+	if index < numWords {
+		offsetToWordEndOffset := self.OffsetToWords + 1 + (uint32(index) << 1)
+		wordEndOffsetIndex := internal.DecodeUint16LE(self.Data[offsetToWordEndOffset : ])
+		var wordStartOffsetIndex uint16
+		if index > 0 {
+			wordStartOffsetIndex = internal.DecodeUint16LE(self.Data[offsetToWordEndOffset - 2 : ])
+		}
+		if wordEndOffsetIndex <= wordStartOffsetIndex { panic(invalidFontData) }
+		wordStartIndex := self.OffsetToWords + 1 + (uint32(numWords) << 1) + uint32(wordStartOffsetIndex)
+		wordLen := (wordEndOffsetIndex - wordStartOffsetIndex)
+		return unsafe.String(&self.Data[wordStartIndex], wordLen)
+	} else {
+		return GetPredefinedWord(index)
+	}
+}
+
 func (self *FontSettings) Count() uint8 {
 	return self.Data[self.OffsetToSettingNames]
 }
@@ -575,9 +598,10 @@ func (self *FontSettings) GetNumOptions(key SettingKey) uint8 {
 	if uint8(key) >= self.Count() { return 0 }
 
 	var startOffset uint16
-	endOffset := internal.DecodeUint16LE(self.Data[self.OffsetToSettingDefinitions + (uint32(key) << 1) : ])
+	keyEndOffsetIndex := self.OffsetToSettingDefinitions + (uint32(key) << 1)
+	endOffset := internal.DecodeUint16LE(self.Data[keyEndOffsetIndex : ])
 	if key > 0 {
-		startOffset = internal.DecodeUint16LE(self.Data[self.OffsetToSettingDefinitions + (uint32(key - 1) << 1) : ])
+		startOffset = internal.DecodeUint16LE(self.Data[keyEndOffsetIndex - 2 : ])
 	}
 	if endOffset <= startOffset { panic(invalidFontData) }
 	numOpts := endOffset - startOffset
@@ -585,9 +609,41 @@ func (self *FontSettings) GetNumOptions(key SettingKey) uint8 {
 	return uint8(numOpts)
 }
 
-func (self *FontSettings) Each(func(key SettingKey, name string)) {
-	panic("unimplemented")
+func (self *FontSettings) GetOptionName(key SettingKey, option uint8) string {
+	// the first part is basically the same as GetNumOptions
+	numSettings := uint32(self.Count())
+	key32 := uint32(key)
+	if key32 >= numSettings { panic("invalid setting key") }
+	keyEndOffsetIndex := self.OffsetToSettingDefinitions + (key32 << 1)
+	endOffset := internal.DecodeUint16LE(self.Data[keyEndOffsetIndex : ])
+	var startOffset uint16
+	if key != 0 {
+		startOffset = internal.DecodeUint16LE(self.Data[keyEndOffsetIndex - 2 : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	numOpts := endOffset - startOffset
+	if numOpts > 255 { panic(invalidFontData) }
+
+	// validate the given option
+	opt32 := uint32(option)
+	if opt32 >= uint32(numOpts) { panic("invalid setting option (out of bounds)") }
+	optionValue := self.Data[self.OffsetToSettingDefinitions + (numSettings << 1) + uint32(startOffset) + opt32]
+	return self.GetWord(optionValue)
 }
+
+func (self *FontSettings) Each(fn func(key SettingKey, name string)) {
+	numSettings := int(self.Count())
+	var prevNameEnd int
+	var offsetToNameEnds int = int(self.OffsetToSettingNames + 1)
+	var offsetToNames int = offsetToNameEnds + numSettings*2
+	for i := 0; i < numSettings; i++ {
+		nameEndOffset := int(internal.DecodeUint16LE(self.Data[offsetToNameEnds + i*2 : ]))
+		nameLen := nameEndOffset - prevNameEnd
+		fn(SettingKey(i), unsafe.String(&self.Data[offsetToNames + prevNameEnd], nameLen))
+		prevNameEnd = nameEndOffset
+	}
+}
+
 func (self *FontSettings) EachOption(key SettingKey, each func(optionIndex uint8, optionName string)) {
 	panic("unimplemented")
 }
@@ -621,13 +677,12 @@ type GlyphMappingGroup struct {
 }
 func (self *GlyphMappingGroup) Size() uint8 {
 	if self.directMapping { return 1 }
-	size := (0b0111_1111 & self.font.Data[self.offset + 0]) + 1
-	if size == 0 { panic(invalidFontData) } // discretionary assertion
-	return size
+	return (0b0111_1111 & self.font.Data[self.offset + 0]) + 1
 }
 func (self *GlyphMappingGroup) AnimationFlags() AnimationFlags {
 	if self.directMapping { return 0 }
-	return AnimationFlags(self.font.Data[self.offset + 1])
+	if (0b0111_1111 & self.font.Data[self.offset + 0]) == 0 { return 0 }
+	return AnimationFlags(self.font.Data[self.offset + 2])
 }
 func (self *GlyphMappingGroup) CaseBranch() uint8 {
 	return self.caseBranch
@@ -646,6 +701,10 @@ func (self *GlyphMappingGroup) Select(choice uint8) GlyphIndex {
 	size := (info & 0b0111_1111) + 1
 	if choice >= size { panic("choice outside valid range") } // discretionary assertion
 
+	// no animation case (single glyph)
+	if size == 1 { return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 1 : ])) }
+
+	// multi-glyph case (group)
 	if (info & 0b1000_0000) != 0 { // range case
 		return GlyphIndex(internal.DecodeUint16LE(self.font.Data[self.offset + 2 : ]) + uint16(choice))
 	} else {
@@ -666,27 +725,25 @@ func (self *FontMapping) EvaluateSwitch(switchKey uint8, settings []uint8) uint8
 	numSwitchTypes := self.NumSwitchTypes()
 	if switchKey >= numSwitchTypes { panic("invalid switch key") }
 
+	switchEndOffsetIndex := self.OffsetToMappingSwitches + 1 + (uint32(switchKey) << 1)
+	endOffset := internal.DecodeUint16LE(self.Data[switchEndOffsetIndex : ])
 	var startOffset uint16 = 0
-	endOffset := internal.DecodeUint16LE(self.Data[self.OffsetToMappingSwitches + 1 + uint32(switchKey) : ])
 	if switchKey > 0 {
-		startOffset = internal.DecodeUint16LE(self.Data[self.OffsetToMappingSwitches + uint32(switchKey) : ])
+		startOffset = internal.DecodeUint16LE(self.Data[switchEndOffsetIndex - 2 : ])
 	}
 	if endOffset <= startOffset { panic(invalidFontData) }
-	endOffset -= 1 // we will evaluate from last to first
-
+	
 	offsetToMappingSwitchesData := self.OffsetToMappingSwitches + 1 + (uint32(numSwitchTypes) << 1)
-	var subgroupCombinations uint8 = 1
+	var caseCombinations uint8 = 1
 	var result uint8
-	for endOffset > startOffset {
-		settingKey := settings[self.Data[offsetToMappingSwitchesData + uint32(endOffset)]]
-		result += settings[settingKey]*subgroupCombinations
-		subgroupCombinations *= (*FontSettings)(self).GetNumOptions(SettingKey(settingKey))
+	endOffset -= 1 // we will evaluate from last to first
+	for {
+		settingKey := SettingKey(self.Data[offsetToMappingSwitchesData + uint32(endOffset)])
+		result += settings[settingKey]*caseCombinations
+		if endOffset == startOffset { break }
+		caseCombinations *= (*FontSettings)(self).GetNumOptions(SettingKey(settingKey))
 		endOffset -= 1
 	}
-
-	// last step: endOffset reached startOffset
-	settingKey := settings[self.Data[offsetToMappingSwitchesData + uint32(endOffset)]]
-	result += settings[settingKey]*subgroupCombinations
 	return result
 }
 
@@ -718,11 +775,11 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	
 	// target found at minIndex
 	offsetToMappingEndOffsets := offsetToSearchIndex + (int(numEntries) << 2)
+	codePointEndOffsetIndex := offsetToMappingEndOffsets + minIndex + (minIndex << 1)
+	endOffset := internal.DecodeUint24LE(self.Data[codePointEndOffsetIndex : ])
 	var startOffset uint32
-	endOffset := internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
 	if minIndex > 0 {
-		minIndex -= 1
-		startOffset = internal.DecodeUint24LE(self.Data[offsetToMappingEndOffsets + minIndex + (minIndex << 1) : ])
+		startOffset = internal.DecodeUint24LE(self.Data[codePointEndOffsetIndex - 3 : ])
 	}
 	if endOffset <= startOffset { panic(invalidFontData) }
 	offsetToMappingData := offsetToMappingEndOffsets + int(numEntries) + (int(numEntries) << 1)
@@ -742,14 +799,17 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	}
 	group := GlyphMappingGroup{ font: (*Font)(self), caseBranch: targetSwitchCase }
 	for targetSwitchCase > 0 {
-		groupSize := self.Data[offsetToMappingData + int(startOffset)]
+		groupInfo := self.Data[offsetToMappingData + int(startOffset)]
+		groupSize := (groupInfo & 0b0111_1111) + 1
 		groupDefinedAsRange := ((groupSize & 0b1000_0000) != 0)
 		if groupDefinedAsRange {
-			startOffset += 4 // 1 byte group size, 1 byte anim flags, 2 bytes base glyph
+			startOffset += 3 // 1 byte group size, 2 bytes base glyph
 		} else {
-			startOffset += 2 + (uint32(groupSize + 1) << 1)
+			startOffset += 1 + (uint32(groupSize) << 1)
 		}
+		if groupSize > 1 { startOffset += 1 } // anim flag skip
 		targetSwitchCase -= 1
+
 		if startOffset >= endOffset { panic(invalidFontData) } // discretionary assertion
 	}
 	group.offset = uint32(offsetToMappingData) + startOffset

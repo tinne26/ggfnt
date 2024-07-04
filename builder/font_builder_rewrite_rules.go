@@ -11,7 +11,7 @@ type glyphRewriteRule struct {
 	headLen uint8
 	bodyLen uint8
 	tailLen uint8
-	inElemsAreGroups boolList // if true, they are groups, otherwise, they are single values
+	inElemsAreGroups internal.BoolList // if true, they are groups, otherwise, they are single values
 	inGlyphs []uint64
 	inGroups []uint64
 	output []uint64 // glyph UIDs (255 at most)
@@ -116,7 +116,7 @@ type utf8RewriteRule struct {
 	headLen uint8
 	bodyLen uint8
 	tailLen uint8
-	inElemsAreGroups boolList
+	inElemsAreGroups internal.BoolList
 	inRunes []rune
 	inGroups []uint64
 	output []rune

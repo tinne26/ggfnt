@@ -236,7 +236,7 @@ Mappings blob[...]
 
 Each entry of mapping data consists of a switch. The first byte is the switch type (255 if inconditional mapping is used). If any other switch type is used, we have a sequence of glyph groups with one or more glyph indices. 254 is reserved for a single group without settings. Glyph groups are defined as follows:
 - Total group size as `uint8`. If the top bit is 1, the group is a range, otherwise it's a list of individual glyphs. The remaining 0x0XXX_XXXX bits indicate the group size - 1 (so, 0 is 1, 1 is 2, etc).
-- If group size > 1, we have one byte indicating the group's animation characteristics:
+- If group size > 1, we have one byte indicating the group's animation flags and characteristics:
 	- 0b0000_0001: loopable. The animation can wrap back to the start after reaching the end.
 	- 0b0000_0010: sequential. The animation should always be played sequentially from start to end or backwards.
 	- 0b0000_0100: terminal. The animation represents a vanishing or destructive sequence that shouldn't be automatically rewinded or replayed.

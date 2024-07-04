@@ -10,11 +10,6 @@ type glyphData struct {
 	Mask *image.Alpha
 }
 
-type settingEntry struct {
-	Name string
-	Values []uint8
-}
-
 // --- edition subtypes ---
 
 type editionCategory struct {

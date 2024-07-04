@@ -75,7 +75,6 @@ type Font struct {
 	glyphData map[uint64]*glyphData
 
 	// settings
-	words []string
 	settings []settingEntry // removing is expensive and requires many checks and reports
 
 	// mapping and switches
@@ -359,25 +358,39 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	}
 	
 	// --- settings ---
-	if len(self.words) > 255 { panic(invalidInternalState) }
-	numWords := uint8(len(self.words))
+	words := make(map[string]int16, 16)
+	for i, _ := range self.settings {
+		self.settings[i].AppendWords(words)
+	}
+	var builtinWords map[string]int16
+	if len(words) > 0 {
+		builtinWords = make(map[string]int16, 256)
+		for i := 0; i < 256; i++ {
+			builtinWords[ggfnt.GetPredefinedWord(uint8(i))] = int16(i)
+		}
+		err := organizeWords(builtinWords, words)
+		if err != nil { return nil, err }
+	}
+	if len(words) > 255 { panic(invalidInternalState) }
+	numWords := uint8(len(words))
 	font.OffsetToWords = uint32(len(data))
 	data = append(data, numWords)
-	if numWords > 0 {
-		// NOTE: haven't checked for duplications, which could be done. it's not on the
-		// spec, though, and it probably shouldn't be as it's not a correctness issue.
+	if len(words) > 0 {
+		wordsList := make([]string, len(words))
+		for word, index := range words {
+			wordsList[index] = word
+		}
+		slices.Sort(wordsList)
 
-		// append word end offsets
+		// WordEndOffsets
 		var offset uint16
-		for _, word := range self.words {
-			err := internal.ValidateBasicName(word) // optional, but at least must check < 32
-			if err != nil { panic(invalidInternalState) }
+		for word, _ := range words {
 			offset += uint16(len(word))
 			data = internal.AppendUint16LE(data, offset)
 		}
 
-		// append actual words
-		for _, word := range self.words {
+		// Words | append actual words
+		for word, _ := range words {
 			data = append(data, word...)
 		}
 	}
@@ -385,18 +398,13 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 	if len(self.settings) > 255 { panic(invalidInternalState) }
 	numSettings := uint8(len(self.settings))
 	font.OffsetToSettingNames = uint32(len(data))
-	font.OffsetToSettingDefinitions = uint32(len(data)) + 1
 	data = append(data, numSettings)
+	font.OffsetToSettingDefinitions = uint32(len(data)) // temporary assign in case no settings are defined
 	if numSettings > 0 {
 		// SettingNameEndOffsets
 		var offset uint16
 		for i, _ := range self.settings {
-			// NOTE: here we might really want to check for repetitions
-			nameLen := len(self.settings[i].Name)
-			if nameLen <= 0 || nameLen > 32 {
-				panic(invalidInternalState)
-			}
-			offset += uint16(len(self.settings[i].Values))
+			offset += uint16(len(self.settings[i].Name))
 			data = internal.AppendUint16LE(data, offset)
 		}
 
@@ -407,15 +415,15 @@ func (self *Font) Build() (*ggfnt.Font, error) {
 
 		// SettingEndOffsets
 		font.OffsetToSettingDefinitions = uint32(len(data))
+		offset = 0
 		for i, _ := range self.settings {
-			numOptions := len(self.settings[i].Values)
-			if numOptions > 255 { panic(invalidInternalState) }
-			data = append(data, uint8(numOptions))
+			offset += uint16(len(self.settings[i].Options))
+			data = internal.AppendUint16LE(data, offset)
 		}
 
 		// Settings
 		for i, _ := range self.settings {
-			data = append(data, self.settings[i].Values...)
+			data = self.settings[i].AppendTo(data, builtinWords, words)
 		}
 	}
 	
@@ -842,7 +850,7 @@ func (self *Font) computeNumSwitchCases(switchIndex uint8) int {
 	// general case
 	var numCases int
 	for i, settingIndex := range self.mappingSwitches[switchIndex].Settings {
-		numOptions := len(self.settings[settingIndex].Values)
+		numOptions := len(self.settings[settingIndex].Options)
 		if numOptions == 0 { panic(invalidInternalState) }
 		if i == 0 { numCases = numOptions } else { numCases *= numOptions }
 	}

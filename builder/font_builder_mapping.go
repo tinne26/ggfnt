@@ -1,12 +1,40 @@
 package builder
 
 import "slices"
+import "errors"
 
 import "github.com/tinne26/ggfnt"
 import "github.com/tinne26/ggfnt/internal"
 
 type mappingSwitchEntry struct {
 	Settings []uint8
+}
+
+func (self *Font) AddSwitch(settings ...ggfnt.SettingKey) (uint8, error) {
+	if len(settings) < 1 || len(settings) > 255 {
+		return 0, errors.New("mapping switch must contain between 1 and 255 settings")
+	}
+	if len(self.mappingSwitches) >= 254 {
+		return 0, errors.New("can't have more than 254 mapping switches")
+	}
+	repeated := make(map[ggfnt.SettingKey]struct{}, len(settings))
+	numSettings := uint8(len(self.settings))
+	newSettings := make([]uint8, 0, len(settings))
+	for _, setting := range settings {
+		if setting >= ggfnt.SettingKey(numSettings) {
+			return 0, errors.New("mapping switch contains undefined setting")
+		}
+		_, alreadyAdded := repeated[setting]
+		if alreadyAdded {
+			return 0, errors.New("mapping switch can't contain repeated settings")
+		}
+		repeated[setting] = struct{}{}
+		newSettings = append(newSettings, uint8(setting))
+	}
+
+	key := uint8(len(self.mappingSwitches))
+	self.mappingSwitches = append(self.mappingSwitches, mappingSwitchEntry{ Settings: newSettings })
+	return key, nil
 }
 
 type mappingEntry struct {
@@ -58,6 +86,7 @@ func (self *mappingGroup) AppendTo(data []byte, glyphLookup map[uint64]uint16, s
 	if len(self.Glyphs) == 1 {
 		glyphIndex, found := glyphLookup[self.Glyphs[0]]
 		if !found { panic(invalidInternalState) }
+		data = append(data, 0) // list of 1 glyph
 		return internal.AppendUint16LE(data, glyphIndex), scratchBuffer, nil
 	}
 
