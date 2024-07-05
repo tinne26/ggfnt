@@ -672,6 +672,7 @@ func (self *FontSettings) Validate(mode FmtValidation) error {
 type GlyphMappingGroup struct {
 	font *Font
 	offset uint32
+	switchType uint8
 	caseBranch uint8
 	directMapping bool
 }
@@ -751,6 +752,80 @@ func (self *FontMapping) NumEntries() uint16 {
 	return internal.DecodeUint16LE(self.Data[self.OffsetToMapping : ])
 }
 
+func (self *FontMapping) Utf8WithCache(codePoint rune, settingsCache *SettingsCache) (GlyphMappingGroup, bool) {
+	// binary search the code point
+	target := uint32(int32(codePoint))
+	numEntries := self.NumEntries()
+	offsetToSearchIndex := int(self.OffsetToMapping + 2)
+	minIndex, maxIndex := int(0), int(numEntries) - 1
+	for minIndex < maxIndex {
+		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numEntries being uint16
+		value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (midIndex << 2) : ])
+		if value < target {
+			minIndex = midIndex + 1
+		} else {
+			maxIndex = midIndex
+		}
+	}
+
+	if minIndex >= int(numEntries) { return GlyphMappingGroup{}, false }
+	value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (minIndex << 2) : ])
+	if value != target { return GlyphMappingGroup{}, false }
+	
+	// target found at minIndex
+	offsetToMappingEndOffsets := offsetToSearchIndex + (int(numEntries) << 2)
+	codePointEndOffsetIndex := offsetToMappingEndOffsets + minIndex + (minIndex << 1)
+	endOffset := internal.DecodeUint24LE(self.Data[codePointEndOffsetIndex : ])
+	var startOffset uint32
+	if minIndex > 0 {
+		startOffset = internal.DecodeUint24LE(self.Data[codePointEndOffsetIndex - 3 : ])
+	}
+	if endOffset <= startOffset { panic(invalidFontData) }
+	offsetToMappingData := offsetToMappingEndOffsets + int(numEntries) + (int(numEntries) << 1)
+	switchType := self.Data[offsetToMappingData + int(startOffset)]
+	startOffset += 1 // move from switch type offset index to actual data
+	
+	// basic case: inconditional mapping
+	if switchType == 255 {
+		offset := uint32(offsetToMappingData) + startOffset
+		return GlyphMappingGroup{
+			font: (*Font)(self),
+			offset: offset,
+			switchType: switchType,
+			directMapping: true,
+		}, true
+	}
+
+	// general case: switch staircase
+	var targetSwitchCase uint8
+	if switchType != 254 {
+		var cached bool
+		targetSwitchCase, cached = settingsCache.GetMappingCase(switchType)
+		if !cached {
+			targetSwitchCase = self.EvaluateSwitch(switchType, settingsCache.UnsafeSlice())
+			settingsCache.CacheMappingCase(switchType, targetSwitchCase)
+		}
+	}
+
+	group := GlyphMappingGroup{ font: (*Font)(self), switchType: switchType, caseBranch: targetSwitchCase }
+	for targetSwitchCase > 0 {
+		groupInfo := self.Data[offsetToMappingData + int(startOffset)]
+		groupSize := (groupInfo & 0b0111_1111) + 1
+		groupDefinedAsRange := ((groupSize & 0b1000_0000) != 0)
+		if groupDefinedAsRange {
+			startOffset += 3 // 1 byte group size, 2 bytes base glyph
+		} else {
+			startOffset += 1 + (uint32(groupSize) << 1)
+		}
+		if groupSize > 1 { startOffset += 1 } // anim flag skip
+		targetSwitchCase -= 1
+
+		if startOffset >= endOffset { panic(invalidFontData) } // discretionary assertion
+	}
+	group.offset = uint32(offsetToMappingData) + startOffset
+	return group, true
+}
+
 // Notice: line breaks and other control codes shouldn't be requested here,
 // but manually taken into account by the caller instead.
 func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGroup, bool) {
@@ -789,15 +864,21 @@ func (self *FontMapping) Utf8(codePoint rune, settings []uint8) (GlyphMappingGro
 	// basic case: inconditional mapping
 	if switchType == 255 {
 		offset := uint32(offsetToMappingData) + startOffset
-		return GlyphMappingGroup{ font: (*Font)(self), offset: offset, directMapping: true }, true
+		return GlyphMappingGroup{
+			font: (*Font)(self),
+			offset: offset,
+			switchType: switchType,
+			directMapping: true,
+		}, true
 	}
-	
+
 	// general case: switch staircase
 	var targetSwitchCase uint8
 	if switchType != 254 {
 		targetSwitchCase = self.EvaluateSwitch(switchType, settings)
 	}
-	group := GlyphMappingGroup{ font: (*Font)(self), caseBranch: targetSwitchCase }
+
+	group := GlyphMappingGroup{ font: (*Font)(self), switchType: switchType, caseBranch: targetSwitchCase }
 	for targetSwitchCase > 0 {
 		groupInfo := self.Data[offsetToMappingData + int(startOffset)]
 		groupSize := (groupInfo & 0b0111_1111) + 1
@@ -1203,7 +1284,6 @@ func (self *FontKerning) NumVertPairs() uint32 {
 	return internal.DecodeUint24LE(self.Data[self.OffsetToVertKernings : ])
 }
 
-// TODO: this is the next high priority
 func (self *FontKerning) Get(prev, curr GlyphIndex) int8 { // binary search based
 	target := (uint32(prev) << 16) | uint32(curr)
 	numPairs := self.NumPairs()
