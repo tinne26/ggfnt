@@ -109,7 +109,6 @@ func (self *Font) SetAbout(about string) error {
 func (self *Font) GetMetricsStatus() error {
 	if self.ascent == 0 { return errors.New("ascent must be strictly positive") }
 	if self.ascent <= self.extraAscent { return errors.New("ascent must be greater than extra ascent") }
-	if self.descent <= self.extraDescent { return errors.New("descent value must be greater than extra descent") }
 	if self.ascent < self.midlineAscent { return errors.New("ascent must be equal or greater than midline ascent") }
 	if self.ascent < self.uppercaseAscent { return errors.New("ascent must be equal or greater than uppercase ascent") }
 	if self.midlineAscent > self.uppercaseAscent { return errors.New("midline ascent must be equal or greater than uppercase ascent") }

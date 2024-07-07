@@ -123,7 +123,7 @@ TODO: ascent and descent are too ambiguous. Sometimes certain punctuation symbol
 
 The `ExtraAscent` is quite common unless the font actively "squeezes" capital letters to accommodate accents and diacritic marks like "Ä", "É", "Û" and similar. Some fonts may use a feature flag to make squeezing optional. Squeezing letters is not aesthetic and should be avoided, but on some low-res games it might be necessary. If you only want to do it for the retro feel... please seek help.
 
-`ExtraAscent` and `ExtraDescent` also needs to be used in some fonts with animated or decorated glyphs in order to account for the required extra space.
+`ExtraAscent` and `ExtraDescent` might also be needed in some fonts with animated or decorated glyphs in order to account for the required extra space.
 
 The `MidlineAscent` should be set to 0 when no lowercase version of the letters exist. Having unicode mappings from lowercase letters to their capitalized glyphs is discouraged; being strict is better in the font definition context. Diacritic marks on lowecase letters must not be considered for this ascent value. Finally, if lowercase letters are shaped as uppercase letters (changing only the size of lowercase and uppercase letters, known as "small-caps"), this metric still applies and must be set. This can also be done conditionally with a feature flag.
 
