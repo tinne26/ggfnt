@@ -92,53 +92,64 @@ func Parse(reader io.Reader) (*Font, error) {
 	if err != nil { return &font, parser.NewError(err.Error()) }
 
 	// --- color sections ---
-	if traceParsing { fmt.Printf("parsing color sections... (index = %d)\n", parser.Index) }
-	font.OffsetToColorSections = uint32(parser.Index)
-	numDyes, err := parser.ReadUint8()
+	if traceParsing { fmt.Printf("parsing dyes... (index = %d)\n", parser.Index) }
+	font.OffsetToDyes = uint32(parser.Index)
+	numDyes, err := parser.ReadUint8() // NumDyes
 	if err != nil { return &font, err }
-	numPalettes, err := parser.ReadUint8()
-	if err != nil { return &font, err }
-	if numDyes == 0 && numPalettes == 0 {
-		return &font, parser.NewError("NumDyes + NumPalettes must be at least 1")
-	}
-	if int(numDyes) + int(numPalettes) > 255 {
-		return &font, parser.NewError("NumDyes + NumPalettes can't exceed 255")
-	}
-	numColorSections := numDyes + numPalettes // we know this can't overflow
-	
-	err = parser.AdvanceBytes(int(numColorSections - 1)) // advance ColorSectionStarts
-	if err != nil { return &font, err }
-	lastRangeStart, err := parser.ReadUint8()
-	if err != nil { return &font, err }
-	if lastRangeStart == 0 { return &font, parser.NewError("ColorSectionStarts can't reach 0") }
-	numColors := (255 - lastRangeStart) + 1
-	err = parser.AdvanceBytes(int(numColorSections - 1)*2) // advance ColorSectionEndOffsets
-	if err != nil { return &font, err }
-	colorSectionsLen, err := parser.ReadUint16()
-	if err != nil { return &font, err }
-	if colorSectionsLen > uint16(numColors)*4 {
-		return &font, parser.NewError("ColorSectionEndOffsets declares ColorSections to end beyond allowed")
-	}
-	if colorSectionsLen < uint16(numPalettes)*4 + uint16(numDyes) {
-		return &font, parser.NewError("ColorSectionEndOffsets declares ColorSections to end before allowed")
-	}
-	err = parser.AdvanceBytes(int(colorSectionsLen)) // skip color sections
-	if err != nil { return &font, err }
+	var usedColorIndices int
+	if numDyes > 0 {
+		err = parser.AdvanceBytes(int(numDyes - 1)) // DyeEndIndices
+		if err != nil { return &font, err }
+		lastIndex, err := parser.ReadUint8()
+		if err != nil { return &font, err }
+		usedColorIndices += int(lastIndex)
+		if usedColorIndices < int(numDyes) {
+			return &font, errors.New("invalid dye end index")
+		}
+		err = parser.AdvanceBytes(usedColorIndices) // skip dye alphas
+		if err != nil { return &font, err }
 
-	// (color section names)
-	font.OffsetToColorSectionNames = uint32(parser.Index)
-	err = parser.AdvanceBytes(int(numColorSections - 1)*2) // advance ColorSectionNameEndOffsets
-	if err != nil { return &font, err }
-	sectionNamesLen, err := parser.ReadUint16()
-	if err != nil { return &font, err }
-	if sectionNamesLen > uint16(numColorSections)*32 {
-		return &font, parser.NewError("ColorSectionNameEndOffsets declares ColorSectionNames to end beyond allowed")
+		
+		err = parser.AdvanceBytes(int(numDyes - 1)*2) // DyeNameOffsets
+		if err != nil { return &font, err }
+		lastDyeNameEndOffset, err := parser.ReadUint16()
+		if err != nil { return &font, err }
+		if int(lastDyeNameEndOffset) < int(numDyes) {
+			return &font, errors.New("invalid dye name offset")
+		}
+		err = parser.AdvanceBytes(int(lastDyeNameEndOffset))
+		if err != nil { return &font, err }
 	}
-	if sectionNamesLen < uint16(numColorSections) {
-		return &font, parser.NewError("ColorSectionNameEndOffsets declares ColorSectionNames to end before allowed")
-	}
-	err = parser.AdvanceBytes(int(sectionNamesLen)) // advance ColorSectionNames
+
+	if traceParsing { fmt.Printf("parsing palettes... (index = %d)\n", parser.Index) }
+	font.OffsetToPalettes = uint32(parser.Index)
+	numPalettes, err := parser.ReadUint8() // NumPalettes
 	if err != nil { return &font, err }
+	if numPalettes > 0 {
+		err = parser.AdvanceBytes(int(numPalettes - 1)) // PaletteEndIndices
+		if err != nil { return &font, err }
+		lastIndex, err := parser.ReadUint8()
+		if err != nil { return &font, err }
+		usedColorIndices += int(lastIndex)
+		if usedColorIndices > 255 {
+			return &font, errors.New("dyes and palettes exceeding 255 color indices")
+		}
+		if lastIndex < numPalettes {
+			return &font, errors.New("invalid palette end index")
+		}
+		err = parser.AdvanceBytes(int(lastIndex)*4) // skip palette colors
+		if err != nil { return &font, err }
+
+		err = parser.AdvanceBytes(int(numPalettes - 1)*2) // PaletteNameOffsets
+		if err != nil { return &font, err }
+		lastPaletteNameEndOffset, err := parser.ReadUint16()
+		if err != nil { return &font, err }
+		if int(lastPaletteNameEndOffset) < int(numPalettes) {
+			return &font, errors.New("invalid palette name offset")
+		}
+		err = parser.AdvanceBytes(int(lastPaletteNameEndOffset))
+		if err != nil { return &font, err }
+	}
 	
 	font.Data = parser.Bytes // possible slice reallocs
 	err = font.Color().Validate(FmtDefault)

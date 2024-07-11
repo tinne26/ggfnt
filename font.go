@@ -230,144 +230,157 @@ func (self *FontMetrics) Validate(mode FmtValidation) error {
 type FontColor Font
 
 func (self *FontColor) NumDyes() uint8 {
-	return self.Data[self.OffsetToColorSections + 0]
+	return self.Data[self.OffsetToDyes + 0]
 }
 
 func (self *FontColor) NumPalettes() uint8 {
-	return self.Data[self.OffsetToColorSections + 1]
+	return self.Data[self.OffsetToPalettes + 0]
 }
 
-func (self *FontColor) numColorSections() uint8 {
-	numDyes := self.NumDyes()
-	numColorSections := numDyes + self.NumPalettes()
-	if numColorSections < numDyes { panic(invalidFontData) } // overflow
-	return numColorSections
+// This is not [FontColor.NumDyes](), but the total number of
+// alpha values for each dye, the total number of font color indices
+// taken by the dyes.
+func (self *FontColor) NumDyeIndices() uint8 {
+	numDyes := int(self.NumDyes())
+	return self.Data[self.OffsetToDyes + uint32(numDyes)] // if numDyes is 0, this is luckily also 0
+}
+
+// This is not [FontColor.NumPalettes](), but the total number of
+// color values for each palette, the total number of font color indices
+// taken by the palettes.
+func (self *FontColor) NumPaletteIndices() uint8 {
+	numPalettes := int(self.NumPalettes())
+	return self.Data[self.OffsetToPalettes + uint32(numPalettes)] // if numPalettes is 0, this is luckily also 0
 }
 
 func (self *FontColor) Count() uint8 {
 	// the color count is not explicit, we need to find where the last
 	// color section begins, and that reveals the number of colors used
-	lastStart := self.Data[self.OffsetToColorSections + 2 + uint32(self.numColorSections()) - 1]
-	if lastStart == 0 { panic(invalidFontData) }
-	return 255 - lastStart + 1
-}
-
-func (self *FontColor) DyeAlphasCount() uint8 {
-	lastDyeStart := self.Data[self.OffsetToColorSections + 2 + uint32(self.NumDyes()) - 1]
-	if lastDyeStart == 0 { panic(invalidFontData) }
-	dyeAlphasCount := 255 - lastDyeStart + 1
-	if dyeAlphasCount < self.NumDyes() { panic(invalidFontData) }
-	return dyeAlphasCount
+	numDyeIndices := self.NumDyeIndices()
+	numPaletteIndices := self.NumPaletteIndices()
+	total := numDyeIndices + numPaletteIndices
+	if total < numDyeIndices { panic(invalidFontData) } // overflow
+	return total
 }
 
 // Notice: the string is an unsafe.String, so don't store it indefinitely.
 func (self *FontColor) EachDye(fn func(DyeKey, string)) {
 	numDyes := uint32(self.NumDyes())
-	numColorSections := uint32(self.numColorSections())
-	offsetToColorSectionNamesData := self.OffsetToColorSectionNames + (numColorSections << 1)
-
-	var startOffset uint32 = 0
+	offsetToDyeNameEnds := self.OffsetToDyes + 1 + numDyes + uint32(self.NumDyeIndices())
+	offsetToDyeNames := offsetToDyeNameEnds + (numDyes << 1)
+	
+	offsetToNextDyeNameEnd := offsetToDyeNameEnds
+	var nameStartOffset uint32 = 0
 	for i := uint32(0); i < numDyes; i++ {
-		endOffset := uint32(internal.DecodeUint16LE(self.Data[self.OffsetToColorSectionNames + (i << 1) : ]))
-		if endOffset <= startOffset { panic(invalidFontData) }
-		nameLen := endOffset - startOffset
-		dyeName := unsafe.String(&self.Data[offsetToColorSectionNamesData + startOffset], nameLen)
+		nameEndOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToNextDyeNameEnd : ]))
+		if nameEndOffset <= nameStartOffset { panic(invalidFontData) }
+		nameLen := nameEndOffset - nameStartOffset
+		dyeName := unsafe.String(&self.Data[offsetToDyeNames + nameStartOffset], nameLen)
 		fn(DyeKey(i), dyeName)
-		startOffset = endOffset
+		
+		// setup for the next iteration
+		nameStartOffset = nameEndOffset
+		offsetToNextDyeNameEnd += 2
 	}
 }
 
-// TODO: mention the order, because the alphas order is unclear.
+func (self *FontColor) NumDyeAlphas(key DyeKey) uint8 {
+	numDyes := self.NumDyes()
+	if uint8(key) >= numDyes { panic("invalid dye key") }
+	firstAlphaIndex := uint8(0)
+	lastAlphaIndex := self.Data[self.OffsetToDyes + 1 + uint32(key)]
+	if key > 0 {
+		firstAlphaIndex = self.Data[self.OffsetToDyes + uint32(key)]
+	}
+	if firstAlphaIndex >= lastAlphaIndex { panic(invalidFontData) }
+	return lastAlphaIndex - firstAlphaIndex
+}
+
 func (self *FontColor) EachDyeAlpha(key DyeKey, fn func(uint8)) {
-	numDyes := uint32(self.NumDyes())
-	numColorSections := uint32(self.numColorSections())
-	offsetToColorSectionEndOffsets := self.OffsetToColorSections + 2 + numColorSections
-	offsetToColorSectionsData := offsetToColorSectionEndOffsets + (numColorSections << 1)
+	numDyes := self.NumDyes()
+	if uint8(key) >= numDyes { panic("invalid dye key") }
+	offsetToDyeAlphas := self.OffsetToDyes + 1 + uint32(numDyes)
 
-	var startOffset uint32 = 0
-	for i := uint32(0); i < numDyes; i++ {
-		endOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToColorSectionEndOffsets + (i << 1) : ]))
-		if endOffset <= startOffset { panic(invalidFontData) }
-		for offset := startOffset; offset < endOffset; offset++ {
-			fn(self.Data[offsetToColorSectionsData + offset])
-		}
-		startOffset = endOffset
+	firstAlphaIndex := uint8(0)
+	lastAlphaIndex := self.Data[self.OffsetToDyes + 1 + uint32(key)]
+	if key > 0 {
+		firstAlphaIndex = self.Data[self.OffsetToDyes + uint32(key)]
 	}
-}
-
-// Returns the range of color indices taken by the dye in the global
-// font color range [0, 255].
-//
-// An invalid dye key will always return (0, 0). A valid dye key will
-// will always return start and ends > 0. Both start and end are inclusive.
-// Given a valid dye key, the amount of alpha variants is (end - start + 1).
-func (self *FontColor) GetDyeRange(key DyeKey) (start, end uint8) {
-	if uint8(key) >= self.NumDyes() { panic("invalid DyeKey") }
-	keyStart := self.Data[self.OffsetToColorSections + 2 + uint32(key)]
-	if key == 0 { return keyStart, 255 }
-	prevKeyStart := self.Data[self.OffsetToColorSections + 2 + uint32(key) - 1]
-	if prevKeyStart <= keyStart { panic(invalidFontData) }
-	return keyStart, prevKeyStart - 1
+	if firstAlphaIndex >= lastAlphaIndex { panic(invalidFontData) }
+	for alphaIndex := firstAlphaIndex; alphaIndex < lastAlphaIndex; alphaIndex++ {
+		fn(self.Data[offsetToDyeAlphas + uint32(alphaIndex)])
+	}
 }
 
 func (self *FontColor) EachPalette(fn func(PaletteKey, string)) {
-	numDyes := uint32(self.NumDyes())
 	numPalettes := uint32(self.NumPalettes())
-	numColorSections := numDyes + numPalettes
-	if numColorSections > 255 { panic(invalidFontData) }
-	offsetToColorSectionNamesData := self.OffsetToColorSectionNames + (numColorSections << 1)
-
-	var startOffset uint32 = 0
-	for i := numDyes; i < numColorSections; i++ {
-		endOffset := uint32(internal.DecodeUint16LE(self.Data[self.OffsetToColorSectionNames + (i << 1) : ]))
-		if endOffset <= startOffset { panic(invalidFontData) }
-		nameLen := endOffset - startOffset
-		paletteName := unsafe.String(&self.Data[offsetToColorSectionNamesData + startOffset], nameLen)
-		fn(PaletteKey(i - numDyes), paletteName)
-		startOffset = endOffset
+	offsetToPaletteNameEnds := self.OffsetToPalettes + 1 + numPalettes + (uint32(self.NumPaletteIndices()) << 2)
+	offsetToPaletteNames := offsetToPaletteNameEnds + (numPalettes << 1)
+	
+	offsetToNextPaletteNameEnd := offsetToPaletteNameEnds
+	var nameStartOffset uint32 = 0
+	for i := uint32(0); i < numPalettes; i++ {
+		nameEndOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToNextPaletteNameEnd : ]))
+		if nameEndOffset <= nameStartOffset { panic(invalidFontData) }
+		nameLen := nameEndOffset - nameStartOffset
+		PaletteName := unsafe.String(&self.Data[offsetToPaletteNames + nameStartOffset], nameLen)
+		fn(PaletteKey(i), PaletteName)
+		
+		// setup for the next iteration
+		nameStartOffset = nameEndOffset
+		offsetToNextPaletteNameEnd += 2
 	}
+}
+
+func (self *FontColor) NumPaletteColors(key PaletteKey) uint8 {
+	numPalettes := self.NumPalettes()
+	if uint8(key) >= numPalettes { panic("invalid palette key") }
+	firstColorIndex := uint8(0)
+	lastColorIndex := self.Data[self.OffsetToPalettes + 1 + uint32(key)]
+	if key > 0 {
+		firstColorIndex = self.Data[self.OffsetToPalettes + uint32(key)]
+	}
+	if firstColorIndex >= lastColorIndex { panic(invalidFontData) }
+	return lastColorIndex - firstColorIndex
 }
 
 func (self *FontColor) EachPaletteColor(key PaletteKey, fn func(color.RGBA)) {
-	numDyes := uint32(self.NumDyes())
-	numPalettes := uint32(self.NumPalettes())
-	numColorSections := numDyes + numPalettes
-	if numColorSections > 255 { panic(invalidFontData) } // discretionary assertion
-	offsetToColorSectionEndOffsets := self.OffsetToColorSections + 2 + numColorSections
-	offsetToColorSectionsData := offsetToColorSectionEndOffsets + (numColorSections << 1)
+	numPalettes := self.NumPalettes()
+	if uint8(key) >= numPalettes { panic("invalid palette key") }
+	offsetToPaletteColors := self.OffsetToPalettes + 1 + uint32(numPalettes)
 
-	var startOffset uint32 = 0
-	for i := numDyes; i < numColorSections; i++ {
-		endOffset := uint32(internal.DecodeUint16LE(self.Data[offsetToColorSectionEndOffsets + (i << 1) : ]))
-		if endOffset <= startOffset { panic(invalidFontData) }
-		for offset := startOffset; offset < endOffset; offset += 4 {
-			r := self.Data[offsetToColorSectionsData + offset + 0]
-			g := self.Data[offsetToColorSectionsData + offset + 1]
-			b := self.Data[offsetToColorSectionsData + offset + 2]
-			a := self.Data[offsetToColorSectionsData + offset + 3]
-			fn(color.RGBA{r, g, b, a})
-		}
-		startOffset = endOffset
+	firstColorIndex := uint8(0)
+	lastColorIndex := self.Data[self.OffsetToPalettes + 1 + uint32(key)]
+	if key > 0 {
+		firstColorIndex = self.Data[self.OffsetToPalettes + uint32(key)]
+	}
+	if firstColorIndex >= lastColorIndex { panic(invalidFontData) }
+	for colorIndex := firstColorIndex; colorIndex < lastColorIndex; colorIndex++ {
+		colorDataOffset := offsetToPaletteColors + (uint32(colorIndex) << 2)
+		fn(color.RGBA{
+			R: self.Data[colorDataOffset + 0],
+			G: self.Data[colorDataOffset + 1],
+			B: self.Data[colorDataOffset + 2],
+			A: self.Data[colorDataOffset + 3],
+		})
 	}
 }
 
-// Returns the range of color indices taken by the palette in the global
-// font color range [0, 255]. Palettes always start after dyes.
-//
-// An invalid palette key will always return (0, 0). A valid palette
-// key will always return start and ends > 0. Both start and end are
-// inclusive. Given a valid palette key, the size is (end - start + 1).
-func (self *FontColor) GetPaletteRange(key PaletteKey) (start, end uint8) {
-	if uint8(key) >= self.NumPalettes() { panic("invalid PaletteKey") }
-	
-	numDyes := self.NumDyes()
-	relKey := uint32(numDyes) + uint32(key)
-	keyStart := self.Data[self.OffsetToColorSections + 2 + relKey]
-	if 255 - keyStart < numDyes { panic(invalidFontData) }
-	if key == 0 && numDyes == 0 { return keyStart, 255 }
-	prevKeyStart := self.Data[self.OffsetToColorSections + 2 + relKey - 1]
-	if prevKeyStart <= keyStart { panic(invalidFontData) }
-	return keyStart, prevKeyStart - 1
+func (self *FontColor) GoColorPalette() color.Palette {
+	paletteColors := make([]color.Color, 0, int(self.Count()))
+	paletteColors = append(paletteColors, color.RGBA{0, 0, 0, 0})
+
+	for n := uint8(0); n < self.NumDyes(); n++ {
+		self.EachDyeAlpha(DyeKey(n), func(alpha uint8) {
+			paletteColors = append(paletteColors, color.RGBA{ alpha, alpha, alpha, alpha })
+		})
+	}
+	for n := uint8(0); n < self.NumPalettes(); n++ {
+		self.EachPaletteColor(PaletteKey(n), func(rgba color.RGBA) {
+			paletteColors = append(paletteColors, rgba)
+		})
+	}
+	return color.Palette(paletteColors)
 }
 
 func (self *FontColor) Validate(mode FmtValidation) error {
@@ -379,34 +392,35 @@ func (self *FontColor) Validate(mode FmtValidation) error {
 		return errors.New("NumDyes + NumPalettes can't exceed 255")
 	}
 
+	// TODO: restore
 	// check section sizes vs offsets
-	startsIndex  := self.OffsetToColorSections + 2
-	offsetsIndex := startsIndex + numColorSections
-	prevSectionEnd := uint16(256) // exclusive
-	prevOffset := uint16(0)
-	for i := uint32(0); i < numColorSections; i++ {
-		sectionStart := uint16(self.Data[startsIndex])
-		if sectionStart >= prevSectionEnd {
-			return errors.New("invalid ColorSectionStarts sequence")
-		}
-		sectionSize := prevSectionEnd - sectionStart
-		endOffset := internal.DecodeUint16LE(self.Data[offsetsIndex : ])
+	// startsIndex  := self.OffsetToColorSections + 2
+	// offsetsIndex := startsIndex + numColorSections
+	// prevSectionEnd := uint16(256) // exclusive
+	// prevOffset := uint16(0)
+	// for i := uint32(0); i < numColorSections; i++ {
+	// 	sectionStart := uint16(self.Data[startsIndex])
+	// 	if sectionStart >= prevSectionEnd {
+	// 		return errors.New("invalid ColorSectionStarts sequence")
+	// 	}
+	// 	sectionSize := prevSectionEnd - sectionStart
+	// 	endOffset := internal.DecodeUint16LE(self.Data[offsetsIndex : ])
 
-		if i < numDyes {
-			if endOffset - prevOffset != sectionSize {
-				return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (dye shades count)")
-			}
-		} else {
-			if endOffset - prevOffset != sectionSize*4 {
-				return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (palette color count)")
-			}
-		}
+	// 	if i < numDyes {
+	// 		if endOffset - prevOffset != sectionSize {
+	// 			return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (dye shades count)")
+	// 		}
+	// 	} else {
+	// 		if endOffset - prevOffset != sectionSize*4 {
+	// 			return errors.New("mismatch between ColorSectionStarts and ColorSectionEndOffsets (palette color count)")
+	// 		}
+	// 	}
 
-		offsetsIndex += 2
-		startsIndex  += 1
-		prevOffset = endOffset
-		prevSectionEnd = sectionStart
-	}
+	// 	offsetsIndex += 2
+	// 	startsIndex  += 1
+	// 	prevOffset = endOffset
+	// 	prevSectionEnd = sectionStart
+	// }
 
 	// verify paletted RGBA values (premult alpha checks)
 	// TODO ...

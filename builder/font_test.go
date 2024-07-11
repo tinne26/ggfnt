@@ -48,12 +48,12 @@ func TestBasicFontBuild(t *testing.T) {
 
 	// add one glyph to the font
 	mask := image.NewAlpha(image.Rect(0, -4, 3, 0)) // T
-	mask.SetAlpha(0, -4, color.Alpha{255})
-	mask.SetAlpha(1, -4, color.Alpha{255})
-	mask.SetAlpha(2, -4, color.Alpha{255})
-	mask.SetAlpha(1, -3, color.Alpha{255})
-	mask.SetAlpha(1, -2, color.Alpha{255})
-	mask.SetAlpha(1, -1, color.Alpha{255})
+	mask.SetAlpha(0, -4, color.Alpha{1})
+	mask.SetAlpha(1, -4, color.Alpha{1})
+	mask.SetAlpha(2, -4, color.Alpha{1})
+	mask.SetAlpha(1, -3, color.Alpha{1})
+	mask.SetAlpha(1, -2, color.Alpha{1})
+	mask.SetAlpha(1, -1, color.Alpha{1})
 	_, err = builder.AddGlyph(mask)
 	if err != nil {
 		t.Fatalf("unexpected FontBuilder.AddGlyph() error: %s", err)
@@ -132,11 +132,11 @@ func TestBasicFontBuild(t *testing.T) {
 	if reFont.OffsetToMetrics != font.OffsetToMetrics {
 		t.Fatalf("after exporting and re-parsing, offset to metrics is %d (expected %d)", reFont.OffsetToMetrics, font.OffsetToMetrics)
 	}
-	if reFont.OffsetToColorSections != font.OffsetToColorSections {
-		t.Fatalf("after exporting and re-parsing, offset to color sections is %d (expected %d)", reFont.OffsetToColorSections, font.OffsetToColorSections)
+	if reFont.OffsetToDyes != font.OffsetToDyes {
+		t.Fatalf("after exporting and re-parsing, offset to dyes is %d (expected %d)", reFont.OffsetToDyes, font.OffsetToDyes)
 	}
-	if reFont.OffsetToColorSectionNames != font.OffsetToColorSectionNames {
-		t.Fatalf("after exporting and re-parsing, offset to color section names is %d (expected %d)", reFont.OffsetToColorSectionNames, font.OffsetToColorSectionNames)
+	if reFont.OffsetToPalettes != font.OffsetToPalettes {
+		t.Fatalf("after exporting and re-parsing, offset to dyes is %d (expected %d)", reFont.OffsetToPalettes, font.OffsetToPalettes)
 	}
 	if reFont.OffsetToGlyphNames != font.OffsetToGlyphNames {
 		t.Fatalf("after exporting and re-parsing, offset to glyph names is %d (expected %d)", reFont.OffsetToGlyphNames, font.OffsetToGlyphNames)

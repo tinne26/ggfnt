@@ -6,8 +6,11 @@ type Font struct {
 	// offsets to specific points at which critical data appears
 	// (offsetToHeader is always zero)
 	OffsetToMetrics uint32
-	OffsetToColorSections uint32
-	OffsetToColorSectionNames uint32
+	// OffsetToColorSections uint32
+	// OffsetToColorSectionNames uint32
+	OffsetToDyes uint32
+	OffsetToPalettes uint32
+	
 	OffsetToGlyphNames uint32
 	OffsetToGlyphMasks uint32
 	OffsetToWords uint32

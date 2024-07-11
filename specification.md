@@ -139,15 +139,20 @@ Palettes are sets of "static" colors. A renderer might allow swapping the colors
 
 ```Golang
 NumDyes uint8
-NumPalettes uint8 // sum of NumDyes + NumPalettes can't exceed 255
-ColorSectionStarts [NumDyes + NumPalettes]uint8 // inclusive, can't be zero, in descending order
-ColorSectionEndOffsets [NumDyes + NumPalettes]uint16 // section length should be checked at parsing time
-ColorSections blob[[...]byte] // if palette, sectionDataLen = sectionLen*4, otherwise, sectionDataLen = sectionLen
-ColorSectionNameEndOffsets [NumDyes + NumPalettes]uint16
-ColorSectionNames blob[...]
+DyeEndIndices [NumDyes]uint8 // end indices are exclusive
+DyeAlphas blob[...]
+DyeNameEndOffsets [NumDyes]uint16
+DyeNames blob[...]
+NumPalettes uint8 // NumDyes + NumPalettes can't exceed 255
+PaletteEndIndices [NumPalettes]uint8 // this doesn't directly index PaletteColors, that's *4
+PaletteColors blob[...] // 4 uint8 per color (RGBA format)
+PaletteNameEndOffsets [NumPalettes]uint16
+PaletteNames blob[...]
 ```
 
-ColorSections contains data for dyes first, and then palettes, in natural order. Things can get a bit confusing because ColorSectionStarts are inversed, and we typically use color index 255 as the main dye.
+Internally, colors are stored by index. The index zero is reserved for transparent. Then come dyes, and after that the palettes. This means the total number of color indices can't exceed 256 (255 if you don't count the built-in transparent).
+
+The DyeEndIndices don't refer to these internal indices, though, but rather the relative dye indices. For example, if we have two dyes with a single alpha each, we would have `DyeEndIndices = [2]uint8{1, 2}`. Palette indices operate in the same way (they don't continue from 3, they restart).
 
 > Note for GPU renderer implementers: main dye should be optimized using vertex attributes. Others will need explicit uniform changes, but that's expected.
 

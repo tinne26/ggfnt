@@ -1,7 +1,7 @@
 package internal
 
 const MaxFontDataSize = (32 << 20) // check both total file size and after uncompressing without signature
-const FormatVersion = 0x0000_00001
+const FormatVersion = 0x0000_00002
 const MaxGlyphs = 56789
 
 // some of these could be exposed to the public
