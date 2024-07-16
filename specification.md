@@ -93,7 +93,7 @@ MidlineAscent uint8 // a.k.a xheight. set to 0 if no lowercase letters exist
 HorzInterspacing uint8 // default horz spacing between glyphs. typically one or zero
 VertInterspacing uint8 // must be zero if HasVertLayout is false
 LineGap uint8 // suggested line gap for the font
-VertLineWidth uint8 // must be zero if HasVertLayout is false
+VertLineWidth uint8 // must be zero if HasVertLayout is false. doesn't include VertLineGap
 VertLineGap uint8 // must be zero if HasVertLayout is false
 ```
 

@@ -197,10 +197,20 @@ func (self *FontMetrics) VertInterspacing() uint8 {
 func (self *FontMetrics) LineGap() uint8 {
 	return self.Data[self.OffsetToMetrics + 12]
 }
+
+func (self *FontMetrics) VertLineFullWidth() int {
+	return int(self.VertLineWidth()) + int(self.VertLineGap())
+}
+
+// Notice: doesn't include [FontMetrics.VertLineGap]().
+// See [FontMetrics.VertLineFullWidth]().
 func (self *FontMetrics) VertLineWidth() uint8 {
 	return self.Data[self.OffsetToMetrics + 13]
 }
+
 func (self *FontMetrics) VertLineGap() uint8 {
+	// TODO: there are not many good arguments for the split
+	//       between vert line gap and vert line width...
 	return self.Data[self.OffsetToMetrics + 14]
 }
 
@@ -1321,7 +1331,29 @@ func (self *FontKerning) Get(prev, curr GlyphIndex) int8 { // binary search base
 	return int8(self.Data[self.OffsetToHorzKernings + 3 + (numPairs << 2) + uint32(minIndex)])
 }
 
-func (self *FontKerning) GetVert(prev, curr GlyphIndex) int8 { panic("unimplemented") } // binary search based
+func (self *FontKerning) GetVert(prev, curr GlyphIndex) int8 {
+	target := (uint32(prev) << 16) | uint32(curr)
+	numPairs := self.NumVertPairs()
+	offsetToSearchIndex := int(self.OffsetToVertKernings + 3)
+	minIndex, maxIndex := int(0), int(numPairs) - 1
+	for minIndex < maxIndex {
+		midIndex := (minIndex + maxIndex) >> 1 // no overflow possible due to numPairs being uint24
+		value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (midIndex << 2) : ])
+		if value < target {
+			minIndex = midIndex + 1
+		} else {
+			maxIndex = midIndex
+		}
+	}
+
+	if minIndex >= int(numPairs) { return 0 } // no kerning
+	value := internal.DecodeUint32LE(self.Data[offsetToSearchIndex + (minIndex << 2) : ])
+	if value != target { return 0 } // no kerning
+
+	// yes kerning
+	return int8(self.Data[self.OffsetToVertKernings + 3 + (numPairs << 2) + uint32(minIndex)])
+}
+
 func (self *FontKerning) EachPair(func (prev, curr GlyphIndex, kern int8)) { panic("unimplemented") }
 func (self *FontKerning) EachVertPair(func (prev, curr GlyphIndex, kern int8)) { panic("unimplemented") }
 
