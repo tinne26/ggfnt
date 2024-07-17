@@ -15,7 +15,7 @@ The basics are functional, but many advanced features and checks and tests and e
 
 ## Examples
 
-You can see some fonts in action through [tinne26.github.com/ptxt-examples](https://tinne26.github.com/ptxt-examples).
+You can see some fonts in action through [tinne26.github.io/ptxt-examples](https://tinne26.github.io/ptxt-examples).
 
 ## Specification
 
